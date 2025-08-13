@@ -1,0 +1,175 @@
+require('dotenv').config();
+const express = require('express');
+const { App } = require('@slack/bolt');
+const Team = require('./models/Team');
+const SalesforceService = require('./services/salesforce');
+const oauthRoutes = require('./routes/oauth');
+const db = require('./database');
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Slack Bolt App
+const slackApp = new App({
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+  clientId: process.env.SLACK_CLIENT_ID,
+  clientSecret: process.env.SLACK_CLIENT_SECRET,
+  stateSecret: 'my-state-secret',
+  customRoutes: [
+    {
+      path: '/slack/events',
+      method: ['POST'],
+      handler: (req, res) => {
+        res.send('');
+      }
+    }
+  ],
+  installationStore: {
+    storeInstallation: async (installation) => {
+      const teamId = installation.team.id;
+      const existingTeam = await Team.findById(teamId);
+      
+      if (existingTeam) {
+        // Update existing team
+        await db('teams').where({ id: teamId }).update({
+          slack_access_token: installation.user.token,
+          slack_bot_token: installation.bot.token,
+          updated_at: new Date()
+        });
+      } else {
+        // Create new team
+        await Team.create({
+          id: teamId,
+          name: installation.team.name,
+          slack_access_token: installation.user.token,
+          slack_bot_token: installation.bot.token,
+          slack_user_id: installation.user.id
+        });
+      }
+    },
+    fetchInstallation: async (installQuery) => {
+      const team = await Team.findById(installQuery.teamId);
+      if (!team) return null;
+      
+      return {
+        team: { id: team.id, name: team.name },
+        user: { token: team.slack_access_token },
+        bot: { token: team.slack_bot_token }
+      };
+    }
+  }
+});
+
+// Slack slash command handler
+slackApp.command('/support', async ({ command, ack, respond, context }) => {
+  await ack();
+
+  try {
+    const teamId = context.teamId;
+    const team = await Team.findById(teamId);
+    
+    if (!team) {
+      await respond('Team not found. Please reinstall the app.');
+      return;
+    }
+
+    if (!team.salesforce_access_token) {
+      await respond({
+        text: 'Salesforce not connected. Please connect your Salesforce org first.',
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "You need to connect your Salesforce org to use this command."
+            },
+            accessory: {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "Connect Salesforce"
+              },
+              url: `${process.env.APP_URL}/oauth/salesforce/connect/${teamId}`
+            }
+          }
+        ]
+      });
+      return;
+    }
+
+    // Parse the command text
+    const commandText = command.text.trim();
+    const searchMatch = commandText.match(/look through support tickets for customers with (.+)/i);
+    
+    if (!searchMatch) {
+      await respond('Usage: `/support look through support tickets for customers with [search term]`');
+      return;
+    }
+
+    const searchTerm = searchMatch[1];
+    
+    // Search Salesforce
+    const salesforceService = new SalesforceService(team);
+    const cases = await salesforceService.searchSupportTickets(searchTerm);
+    
+    // Log usage
+    await db('usage_logs').insert({
+      team_id: teamId,
+      slack_user_id: command.user_id,
+      command: '/support',
+      query_text: searchTerm,
+      results_count: cases.length
+    });
+
+    // Format and send response
+    const formattedResponse = salesforceService.formatResultsForSlack(cases);
+    await respond(formattedResponse);
+
+  } catch (error) {
+    console.error('Support command error:', error);
+    await respond('Sorry, there was an error processing your request. Please try again.');
+  }
+});
+
+// Express routes
+app.use(express.json());
+app.use('/oauth', oauthRoutes);
+
+// Home page with installation button
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <head><title>Salesforce Support Ticket Bot</title></head>
+      <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1>Salesforce Support Ticket Bot</h1>
+        <p>Search your Salesforce support tickets directly from Slack!</p>
+        <a href="/oauth/slack/install" style="background: #4A154B; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
+          Add to Slack
+        </a>
+      </body>
+    </html>
+  `);
+});
+
+// Setup page for Salesforce connection
+app.get('/setup/salesforce', (req, res) => {
+  const { team_id } = req.query;
+  res.send(`
+    <html>
+      <head><title>Connect Salesforce</title></head>
+      <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1>Connect Your Salesforce Org</h1>
+        <p>To use the support ticket search, please connect your Salesforce organization.</p>
+        <a href="/oauth/salesforce/connect/${team_id}" style="background: #0176D3; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
+          Connect Salesforce
+        </a>
+      </body>
+    </html>
+  `);
+});
+
+// Start the Slack app
+(async () => {
+  await slackApp.start(port);
+  console.log(`⚡️ Salesforce Support Ticket Bot is running on port ${port}!`);
+})();
