@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "SaaS Slack bot for Salesforce support ticket queries",
   "main": "src/app.js",
-  "type": "module",
   "scripts": {
     "start": "npm run migrate && node src/app.js",
     "dev": "nodemon src/app.js",
