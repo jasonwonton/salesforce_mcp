@@ -193,6 +193,9 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
       async (message) => progressMessages.push(message)
     );
     
+    // Ensure teamId is available for UI links
+    results.teamId = teamId;
+    
     // Send combined final response with all progress and results
     const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt, progressMessages);
     await respond(formattedResponse);
@@ -358,6 +361,12 @@ app.get('/', (req, res) => {
 // Setup page for Salesforce connection
 app.get('/setup/salesforce', (req, res) => {
   const { team_id } = req.query;
+  
+  if (!team_id) {
+    res.status(400).send('Team ID is required');
+    return;
+  }
+  
   res.send(`
     <html>
       <head><title>Connect Salesforce</title></head>
@@ -367,6 +376,7 @@ app.get('/setup/salesforce', (req, res) => {
         <a href="/oauth/salesforce/connect/${team_id}" style="background: #0176D3; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
           Connect Salesforce
         </a>
+        <p style="margin-top: 20px; color: #666;">Team ID: ${team_id}</p>
       </body>
     </html>
   `);

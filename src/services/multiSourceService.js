@@ -500,7 +500,7 @@ class MultiSourceService {
             type: "plain_text",
             text: "Connect Salesforce"
           },
-          url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId || 'unknown'}`,
+          url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId}`,
           style: "primary"
         }
       });
@@ -543,7 +543,7 @@ class MultiSourceService {
                 type: "plain_text",
                 text: "Connect"
               },
-              url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId || 'unknown'}`
+              url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId}`
             }
           });
         }
