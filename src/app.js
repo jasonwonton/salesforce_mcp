@@ -14,46 +14,24 @@ const receiver = new ExpressReceiver({
   clientId: process.env.SLACK_CLIENT_ID,
   clientSecret: process.env.SLACK_CLIENT_SECRET,
   stateSecret: 'my-state-secret',
+  scopes: ['commands', 'chat:write', 'users:read'],
+  installationStore: {
+    storeInstallation: async (installation) => {
+      const teamId = installation.team.id;
+      console.log('Storing installation for team:', teamId);
+      return true;
+    },
+    fetchInstallation: async (installQuery) => {
+      console.log('Fetching installation for:', installQuery);
+      return null;
+    }
+  },
   processBeforeResponse: true
 });
 
 // Slack Bolt App
 const slackApp = new App({
-  receiver,
-  installationStore: {
-    storeInstallation: async (installation) => {
-      const teamId = installation.team.id;
-      const existingTeam = await Team.findById(teamId);
-      
-      if (existingTeam) {
-        // Update existing team
-        await db('teams').where({ id: teamId }).update({
-          slack_access_token: installation.user.token,
-          slack_bot_token: installation.bot.token,
-          updated_at: new Date()
-        });
-      } else {
-        // Create new team
-        await Team.create({
-          id: teamId,
-          name: installation.team.name,
-          slack_access_token: installation.user.token,
-          slack_bot_token: installation.bot.token,
-          slack_user_id: installation.user.id
-        });
-      }
-    },
-    fetchInstallation: async (installQuery) => {
-      const team = await Team.findById(installQuery.teamId);
-      if (!team) return null;
-      
-      return {
-        team: { id: team.id, name: team.name },
-        user: { token: team.slack_access_token },
-        bot: { token: team.slack_bot_token }
-      };
-    }
-  }
+  receiver
 });
 
 // Slack slash command handler
