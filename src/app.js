@@ -132,7 +132,7 @@ const app = receiver.app;
 
 // Express routes
 app.use(express.json());
-app.use('/oauth', oauthRoutes);
+// app.use('/oauth', oauthRoutes);
 
 // Home page with installation button
 app.get('/', (req, res) => {
@@ -142,7 +142,7 @@ app.get('/', (req, res) => {
       <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
         <h1>Salesforce Support Ticket Bot</h1>
         <p>Search your Salesforce support tickets directly from Slack!</p>
-        <a href="/oauth/slack/install" style="background: #4A154B; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
+        <a href="/slack/install" style="background: #4A154B; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
           Add to Slack
         </a>
       </body>
