@@ -7,6 +7,10 @@ const secretKey = process.env.ENCRYPTION_KEY || 'default-key-for-development-onl
 const key = crypto.createHash('sha256').update(secretKey).digest();
 
 function encrypt(text) {
+  if (!text || typeof text !== 'string') {
+    throw new Error(`Cannot encrypt invalid data: ${typeof text}`);
+  }
+  
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(algorithm, key, iv);
   

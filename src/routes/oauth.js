@@ -162,14 +162,20 @@ router.get('/salesforce/callback', async (req, res) => {
     );
 
     const { access_token, refresh_token, instance_url } = response.data;
+    
+    console.log('Salesforce response data:', {
+      access_token: access_token ? '[PRESENT]' : 'MISSING',
+      refresh_token: refresh_token ? '[PRESENT]' : 'MISSING', 
+      instance_url: instance_url || 'MISSING'
+    });
 
     // Update team with Salesforce credentials
     await Team.updateSalesforceCredentials(teamId, {
       access_token,
       refresh_token,
       instance_url,
-      client_id: 'YOUR_SF_CLIENT_ID',
-      client_secret: 'YOUR_SF_CLIENT_SECRET'
+      client_id: process.env.SALESFORCE_CLIENT_ID,
+      client_secret: process.env.SALESFORCE_CLIENT_SECRET
     });
 
     res.send('Setup complete! You can now use /support in Slack.');
