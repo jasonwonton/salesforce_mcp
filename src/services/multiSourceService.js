@@ -67,52 +67,59 @@ class MultiSourceService {
   }
 
   async searchWithIntelligentPlanning(userPrompt, respondCallback) {
-    // Step 1: AI Planning
-    await respondCallback('🤖 **AI Planning:** Analyzing your request...');
+    // Step 1: AI Planning - Be specific about what we plan to do
+    await respondCallback(`🤖 **AI Planning:** Understanding "${userPrompt}"...`);
     
     const searchTerms = await this.generateSearchTerms(userPrompt);
-    await respondCallback(`🧠 **AI Thinking:** I'll search for: ${searchTerms.map(term => `"${term}"`).join(', ')}`);
+    await respondCallback(`🧠 **AI Strategy:** I'll look for tickets containing: ${searchTerms.map(term => `"${term}"`).join(', ')}`);
     
-    // Step 2: Check connections
-    await respondCallback('🔍 **Checking connections...**');
+    // Step 2: Check connections and plan search strategy
+    await respondCallback('🔍 **Checking what systems I can search...**');
     
     const connectionStatus = await this.checkConnections();
-    let statusMessage = '📊 **Connection Status:**\n';
+    
+    // Create detailed search plan
+    let searchPlan = '📋 **My Search Plan:**\n';
+    const availableSources = [];
     
     if (connectionStatus.salesforce.connected) {
-      statusMessage += '✅ Salesforce: Connected\n';
+      searchPlan += `✅ Search Salesforce support cases for ${searchTerms.join(', ')}\n`;
+      availableSources.push('Salesforce');
     } else {
-      statusMessage += `❌ Salesforce: ${connectionStatus.salesforce.reason}\n`;
+      searchPlan += `❌ Can't search Salesforce: ${connectionStatus.salesforce.reason}\n`;
     }
     
     if (connectionStatus.jira.connected) {
-      statusMessage += '✅ Jira: Connected';
+      searchPlan += `✅ Search Jira issues for ${searchTerms.join(', ')}`;
+      availableSources.push('Jira');
     } else {
-      statusMessage += `❌ Jira: ${connectionStatus.jira.reason}`;
+      searchPlan += `❌ Can't search Jira: ${connectionStatus.jira.reason}`;
     }
     
-    await respondCallback(statusMessage);
+    await respondCallback(searchPlan);
     
-    // Step 3: Search available sources
-    const searchPromises = [];
-    let searchMessage = '🔍 **Searching:**';
-    
-    if (connectionStatus.salesforce.connected) {
-      searchMessage += ' Salesforce';
-      searchPromises.push(this.searchSalesforce(searchTerms));
-    }
-    
-    if (connectionStatus.jira.connected) {
-      searchMessage += searchPromises.length > 0 ? ' + Jira' : ' Jira';
-      searchPromises.push(this.searchJira(searchTerms));
-    }
-    
-    if (searchPromises.length === 0) {
-      await respondCallback('❌ **No systems available to search.** Please connect at least one system.');
+    // Step 3: Handle no connections case
+    if (availableSources.length === 0) {
+      await respondCallback('🚫 **Problem:** No systems are connected! You need to connect at least one system to search.');
       return { salesforce: [], jira: [], searchTerms, connectionStatus };
     }
     
-    await respondCallback(searchMessage + '...');
+    // Step 4: Execute searches with progress updates
+    const searchPromises = [];
+    
+    if (connectionStatus.salesforce.connected) {
+      await respondCallback(`🔍 **Searching Salesforce** for support cases with: ${searchTerms.join(', ')}...`);
+      searchPromises.push(this.searchSalesforceWithProgress(searchTerms, respondCallback));
+    } else {
+      await respondCallback(`⏭️ **Skipping Salesforce** (need to connect first)`);
+    }
+    
+    if (connectionStatus.jira.connected) {
+      await respondCallback(`🔍 **Searching Jira** for issues with: ${searchTerms.join(', ')}...`);
+      searchPromises.push(this.searchJiraWithProgress(searchTerms, respondCallback));
+    } else {
+      await respondCallback(`⏭️ **Skipping Jira** (not configured)`);
+    }
     
     // Execute searches
     const results = await Promise.all(searchPromises);
@@ -163,34 +170,54 @@ class MultiSourceService {
     return status;
   }
 
-  async searchSalesforce(searchTerms) {
+  async searchSalesforceWithProgress(searchTerms, respondCallback) {
     const allResults = [];
     for (const searchTerm of searchTerms) {
       try {
         const results = await this.salesforceService.searchSupportTickets(searchTerm);
         allResults.push(...results);
+        if (results.length > 0) {
+          await respondCallback(`✅ **Salesforce:** Found ${results.length} cases matching "${searchTerm}"`);
+        }
       } catch (error) {
         console.error(`Salesforce search failed for "${searchTerm}":`, error.message);
+        if (error.message.includes('not connected') || error.message.includes('token')) {
+          await respondCallback(`❌ **Salesforce Login Required:** Please connect your Salesforce account to search cases`);
+          throw error;
+        }
+        await respondCallback(`⚠️ **Salesforce:** Error searching for "${searchTerm}" - ${error.message}`);
       }
     }
-    return this.removeDuplicates(allResults, 'Id');
+    const deduplicated = this.removeDuplicates(allResults, 'Id');
+    if (deduplicated.length === 0) {
+      await respondCallback(`📭 **Salesforce:** No support cases found with those terms`);
+    }
+    return deduplicated;
   }
 
-  async searchJira(searchTerms) {
+  async searchJiraWithProgress(searchTerms, respondCallback) {
     const allResults = [];
     for (const searchTerm of searchTerms) {
       try {
         const results = await this.jiraService.searchIssues(searchTerm);
         allResults.push(...results);
+        if (results.length > 0) {
+          await respondCallback(`✅ **Jira:** Found ${results.length} issues matching "${searchTerm}"`);
+        }
       } catch (error) {
         console.error(`Jira search failed for "${searchTerm}":`, error.message);
-        // If there's a connection error, don't continue with other terms
         if (error.message.includes('ENOTFOUND') || error.message.includes('authentication')) {
+          await respondCallback(`❌ **Jira Connection Error:** Check your Jira credentials - ${error.message}`);
           throw error;
         }
+        await respondCallback(`⚠️ **Jira:** Error searching for "${searchTerm}" - ${error.message}`);
       }
     }
-    return this.removeDuplicates(allResults, 'key');
+    const deduplicated = this.removeDuplicates(allResults, 'key');
+    if (deduplicated.length === 0) {
+      await respondCallback(`📭 **Jira:** No issues found with those terms`);
+    }
+    return deduplicated;
   }
 
   removeDuplicates(array, idField) {
