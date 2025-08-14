@@ -13,11 +13,11 @@ class ToolService {
     return [
       {
         name: 'search_recent_cases',
-        description: 'Search recent Salesforce cases from today, yesterday, this week, etc.',
+        description: 'Search recent Salesforce cases within specific time periods, optionally filtered by keywords',
         parameters: {
-          timeframe: 'today|yesterday|this_week|this_month',
+          timeframe: 'today|yesterday|this_week|this_month|last_30_days|last_90_days|last_6_months',
           priority: 'High|Medium|Low (optional)',
-          keywords: 'array of search terms (optional)'
+          keywords: 'array of search terms to filter results (optional)'
         }
       },
       {
@@ -119,9 +119,17 @@ Analyze the user request and determine which tool(s) to use. Return JSON:
 
 Examples:
 - "help me" → conversational_response tool
-- "billing issues today" → search_recent_cases tool with timeframe=today, keywords=["billing"]
+- "billing issues today" → search_recent_cases tool with timeframe=today, keywords=["billing"]  
+- "find support cases past days" → search_recent_cases tool with timeframe=last_30_days
+- "cases with login problems last 90 days" → search_recent_cases tool with timeframe=last_90_days, keywords=["login"]
+- "recent billing issues" → search_recent_cases tool with timeframe=this_month, keywords=["billing"]
 - "red accounts" → get_account_health tool with riskLevel=high
 - "Microsoft deals" → search_opportunities tool with searchTerm="Microsoft"
+
+IMPORTANT: 
+- For ANY request mentioning time periods (recent, past days, last X days, etc.), use search_recent_cases
+- For specific keywords + time, use search_recent_cases with both timeframe AND keywords
+- Only use search_cases_by_keywords for keyword-only searches without time context
 
 Return ONLY JSON, no markdown.
     `;
@@ -248,11 +256,22 @@ Return ONLY JSON, no markdown.
       case 'yesterday': timeCondition = 'CreatedDate = YESTERDAY'; break;
       case 'this_week': timeCondition = 'CreatedDate = THIS_WEEK'; break;
       case 'this_month': timeCondition = 'CreatedDate = THIS_MONTH'; break;
-      default: timeCondition = 'CreatedDate = TODAY';
+      case 'last_30_days': timeCondition = 'CreatedDate = LAST_N_DAYS:30'; break;
+      case 'last_90_days': timeCondition = 'CreatedDate = LAST_N_DAYS:90'; break;
+      case 'last_6_months': timeCondition = 'CreatedDate = LAST_N_DAYS:180'; break;
+      default: timeCondition = 'CreatedDate = LAST_N_DAYS:30'; // Default to last 30 days
     }
 
     let conditions = [timeCondition];
     if (params.priority) conditions.push(`Priority = '${params.priority}'`);
+    
+    // Add keyword filtering if provided
+    if (params.keywords && params.keywords.length > 0) {
+      const keywordConditions = params.keywords.map(keyword => 
+        `(Subject LIKE '%${keyword}%' OR Description LIKE '%${keyword}%')`
+      );
+      conditions.push(`(${keywordConditions.join(' OR ')})`);
+    }
 
     const query = `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name FROM Case WHERE ${conditions.join(' AND ')} ORDER BY CreatedDate DESC LIMIT 20`;
     
