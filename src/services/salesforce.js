@@ -64,12 +64,7 @@ class SalesforceService {
 
   async searchWithSOQL(searchTerm) {
     console.log('Using SOQL fallback for:', searchTerm);
-    const soqlQuery = `
-      SELECT Id, CaseNumber, Subject, Status, CreatedDate, 
-             Account.Name, Contact.Name, Priority, Description
-      FROM Case 
-      LIMIT 20
-    `;
+    const soqlQuery = `SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Contact.Name, Priority, Description FROM Case WHERE Subject LIKE '%${searchTerm}%'`;
 
     try {
       const response = await axios.get(
