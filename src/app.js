@@ -160,7 +160,7 @@ const app = receiver.app;
 
 // Express routes
 app.use(express.json());
-// app.use('/oauth', oauthRoutes);
+app.use('/oauth', oauthRoutes);
 
 // Handle OAuth callback at root
 app.get('/', (req, res) => {

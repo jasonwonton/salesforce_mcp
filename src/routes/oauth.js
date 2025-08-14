@@ -54,7 +54,25 @@ router.get('/slack/callback', async (req, res) => {
 // Salesforce OAuth flow
 router.get('/salesforce/connect/:teamId', (req, res) => {
   const { teamId } = req.params;
-  const salesforceAuthUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=YOUR_SF_CLIENT_ID&redirect_uri=${process.env.APP_URL}/oauth/salesforce/callback&state=${teamId}`;
+  
+  if (teamId === 'unknown') {
+    res.send(`
+      <html>
+        <head><title>Database Connection Required</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+          <h1>🔧 Setup Required</h1>
+          <p>To connect Salesforce, we need to set up the database first.</p>
+          <p>Your Jira search is working great! Salesforce connection will be available once the database is configured.</p>
+          <a href="/" style="background: #4A154B; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
+            Back to Home
+          </a>
+        </body>
+      </html>
+    `);
+    return;
+  }
+  
+  const salesforceAuthUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=${process.env.SALESFORCE_CLIENT_ID}&redirect_uri=${process.env.APP_URL}/oauth/salesforce/callback&state=${teamId}`;
   res.redirect(salesforceAuthUrl);
 });
 
@@ -65,8 +83,8 @@ router.get('/salesforce/callback', async (req, res) => {
     // Exchange code for Salesforce tokens
     const response = await axios.post('https://login.salesforce.com/services/oauth2/token', {
       grant_type: 'authorization_code',
-      client_id: 'YOUR_SF_CLIENT_ID',
-      client_secret: 'YOUR_SF_CLIENT_SECRET',
+      client_id: process.env.SALESFORCE_CLIENT_ID,
+      client_secret: process.env.SALESFORCE_CLIENT_SECRET,
       redirect_uri: `${process.env.APP_URL}/oauth/salesforce/callback`,
       code: code
     });
