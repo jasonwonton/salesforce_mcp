@@ -33,7 +33,8 @@ class SalesforceService {
       console.log('SOSL response:', {
         status: response.status,
         searchRecords: response.data.searchRecords?.length || 0,
-        fullResponse: response.data
+        fullResponse: JSON.stringify(response.data, null, 2),
+        rawUrl: `${this.instanceUrl}/services/data/v58.0/search?q=${encodeURIComponent(soslQuery)}`
       });
 
       // SOSL returns searchRecords array with nested records
