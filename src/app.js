@@ -113,8 +113,15 @@ const app = receiver.app;
 app.use(express.json());
 // app.use('/oauth', oauthRoutes);
 
-// Home page with installation button
+// Handle OAuth callback at root
 app.get('/', (req, res) => {
+  if (req.query.code && req.query.state) {
+    // This is an OAuth callback, redirect to the proper Slack endpoint
+    res.redirect(`/slack/oauth_redirect?code=${req.query.code}&state=${req.query.state}`);
+    return;
+  }
+  
+  // Regular home page
   res.send(`
     <html>
       <head><title>Salesforce Support Ticket Bot</title></head>
