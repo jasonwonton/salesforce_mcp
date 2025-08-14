@@ -33,6 +33,35 @@ class SalesforceService {
     }
   }
 
+  async executeSOSLQuery(soslQuery) {
+    if (!this.accessToken || !this.instanceUrl) {
+      throw new Error('Salesforce not connected for this team');
+    }
+
+    try {
+      const response = await axios.get(
+        `${this.instanceUrl}/services/data/v58.0/search`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          params: {
+            q: soslQuery
+          }
+        }
+      );
+
+      console.log('SOSL Query:', soslQuery);
+      console.log('SOSL Results:', response.data.searchRecords?.length || 0);
+
+      return response.data;
+    } catch (error) {
+      console.error('SOSL query failed:', error.response?.data || error.message);
+      throw new Error(`SOSL query failed: ${error.response?.data?.message || error.message}`);
+    }
+  }
+
   async searchSupportTickets(searchTerm) {
     if (!this.accessToken || !this.instanceUrl) {
       throw new Error('Salesforce not connected for this team');

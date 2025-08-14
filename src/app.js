@@ -210,7 +210,38 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
       } else if (result.success) {
         responseText += `🔍 **${result.toolName}**: Found ${result.count} results\n`;
         
-        if (result.data && result.data.length > 0) {
+        // Handle multi-object search results
+        if (result.toolName === 'search_all_objects' && result.data) {
+          if (result.breakdown) {
+            responseText += `📊 **Breakdown:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
+          }
+          
+          // Show cases first
+          if (result.data.cases && result.data.cases.length > 0) {
+            responseText += `📋 **Cases:**\n`;
+            result.data.cases.slice(0, 3).forEach((case_, index) => {
+              responseText += `${index + 1}. ${case_.CaseNumber}: ${case_.Subject}\n`;
+            });
+          }
+          
+          // Show accounts
+          if (result.data.accounts && result.data.accounts.length > 0) {
+            responseText += `🏢 **Accounts:**\n`;
+            result.data.accounts.slice(0, 3).forEach((account, index) => {
+              responseText += `${index + 1}. ${account.Name}\n`;
+            });
+          }
+          
+          // Show opportunities
+          if (result.data.opportunities && result.data.opportunities.length > 0) {
+            responseText += `💰 **Opportunities:**\n`;
+            result.data.opportunities.slice(0, 2).forEach((opp, index) => {
+              responseText += `${index + 1}. ${opp.Name} (${opp.StageName})\n`;
+            });
+          }
+        } 
+        // Handle single-object results
+        else if (result.data && result.data.length > 0) {
           result.data.slice(0, 5).forEach((item, index) => {
             if (item.CaseNumber) {
               responseText += `${index + 1}. ${item.CaseNumber}: ${item.Subject}\n`;

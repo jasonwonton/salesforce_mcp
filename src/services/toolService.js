@@ -29,6 +29,13 @@ class ToolService {
         }
       },
       {
+        name: 'search_all_objects',
+        description: 'Search across ALL Salesforce objects (Accounts, Contacts, Cases, Opportunities) at once using SOSL',
+        parameters: {
+          searchTerm: 'term to search across all objects'
+        }
+      },
+      {
         name: 'search_accounts',
         description: 'Search for Salesforce accounts by name or criteria',
         parameters: {
@@ -184,6 +191,8 @@ Return ONLY JSON, no markdown.
         return await this.searchRecentCases(parameters);
       case 'search_cases_by_keywords':
         return await this.searchCasesByKeywords(parameters);
+      case 'search_all_objects':
+        return await this.searchAllObjects(parameters);
       case 'search_accounts':
         return await this.searchAccounts(parameters);
       case 'get_account_health':
@@ -249,6 +258,61 @@ Return ONLY JSON, no markdown.
       };
     } catch (error) {
       return { toolName: 'search_cases_by_keywords', success: false, error: error.message };
+    }
+  }
+
+  async searchAllObjects(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      // Use the FIND query you mentioned!
+      const soslQuery = `FIND {${params.searchTerm}} RETURNING Account(Name, Id), Contact(Name, Email, Id), Case(CaseNumber, Subject, Status, Id), Opportunity(Name, StageName, Amount, Id)`;
+      
+      const response = await this.salesforceService.executeSOSLQuery(soslQuery);
+      
+      // Parse SOSL results by object type
+      const results = {
+        accounts: [],
+        contacts: [],
+        cases: [],
+        opportunities: []
+      };
+      
+      if (response.searchRecords) {
+        response.searchRecords.forEach(record => {
+          switch (record.attributes.type) {
+            case 'Account':
+              results.accounts.push(record);
+              break;
+            case 'Contact':
+              results.contacts.push(record);
+              break;
+            case 'Case':
+              results.cases.push(record);
+              break;
+            case 'Opportunity':
+              results.opportunities.push(record);
+              break;
+          }
+        });
+      }
+      
+      return {
+        toolName: 'search_all_objects',
+        success: true,
+        data: results,
+        count: response.searchRecords?.length || 0,
+        breakdown: {
+          accounts: results.accounts.length,
+          contacts: results.contacts.length,
+          cases: results.cases.length,
+          opportunities: results.opportunities.length
+        }
+      };
+    } catch (error) {
+      return { toolName: 'search_all_objects', success: false, error: error.message };
     }
   }
 
