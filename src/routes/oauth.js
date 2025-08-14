@@ -139,9 +139,11 @@ router.get('/salesforce/callback', async (req, res) => {
     codeVerifiers.delete(teamId);
     
     // Exchange code for Salesforce tokens with PKCE
+    // For confidential clients (server-to-server), include client_secret
     const tokenData = {
       grant_type: 'authorization_code',
       client_id: process.env.SALESFORCE_CLIENT_ID,
+      client_secret: process.env.SALESFORCE_CLIENT_SECRET,
       redirect_uri: `${process.env.APP_URL}/oauth/salesforce/callback`,
       code: code,
       code_verifier: codeVerifier
