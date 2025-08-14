@@ -248,6 +248,7 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     let team = null;
     try {
       team = await Team.findById(teamId);
+      console.log('Team found:', !!team, team?.salesforce_access_token ? 'with SF token' : 'no SF token');
     } catch (error) {
       console.error('Database connection failed:', error.message);
     }
@@ -261,10 +262,23 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     if (existingPlan) {
       // This is a plan refinement
       contextPrompt = `Original request: "${existingPlan.userPrompt}"\n\nPrevious plan: ${existingPlan.toolPlan.reasoning}\n\nRefinement request: "${userPrompt}"\n\nPlease create a new plan incorporating this feedback.`;
+      console.log('Refining existing plan for:', existingPlan.userPrompt);
+    } else {
+      console.log('Creating new plan for:', userPrompt);
     }
     
-    // Step 1: AI creates a plan (like Claude Code planning)
-    const toolPlan = await toolService.analyzeRequestAndSelectTools(contextPrompt);
+    // Step 1: AI creates a plan with timeout protection
+    console.log('Calling AI for plan generation...');
+    const planStartTime = Date.now();
+    
+    const toolPlan = await Promise.race([
+      toolService.analyzeRequestAndSelectTools(contextPrompt),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Plan generation timeout')), 25000)
+      )
+    ]);
+    
+    console.log('Plan generated in', Date.now() - planStartTime, 'ms:', toolPlan);
     
     // Store the plan for approval
     global.pendingPlans[planKey] = {
@@ -293,55 +307,67 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
       }
     });
     
-    planText += `\n✅ **Ready to proceed?**`;
+    planText += `\n✅ **Ready to proceed?**\n\n`;
+    planText += `💡 **Note:** If buttons don't work, type \`/station approve\` to execute this plan.`;
     
-    await respond({
-      text: planText,
-      response_type: "in_channel",
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: planText
-          }
-        },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "✅ Execute Plan"
-              },
-              value: planKey,
-              action_id: "approve_plan",
-              style: "primary"
-            },
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "💭 Refine Plan"
-              },
-              value: planKey,
-              action_id: "refine_plan"
-            },
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "❌ Cancel"
-              },
-              value: planKey,
-              action_id: "cancel_plan",
-              style: "danger"
+    console.log('Sending plan with buttons for planKey:', planKey);
+    
+    try {
+      await respond({
+        text: planText,
+        response_type: "in_channel",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: planText
             }
-          ]
-        }
-      ]
-    });
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "✅ Execute Plan"
+                },
+                value: planKey,
+                action_id: "approve_plan",
+                style: "primary"
+              },
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "💭 Refine Plan"
+                },
+                value: planKey,
+                action_id: "refine_plan"
+              },
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "❌ Cancel"
+                },
+                value: planKey,
+                action_id: "cancel_plan",
+                style: "danger"
+              }
+            ]
+          }
+        ]
+      });
+    } catch (blockError) {
+      console.error('Failed to send blocks, falling back to text:', blockError);
+      // Fallback without blocks if interactive components not configured
+      await respond({
+        text: planText + `\n\n**Interactive buttons not available.** Type \`/station approve\` to execute this plan.`,
+        response_type: "in_channel"
+      });
+    }
     
   } catch (error) {
     console.error('Planning error:', error);
