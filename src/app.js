@@ -112,7 +112,7 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
   }
 });
 
-// Station slash command handler - AI-powered multi-source search
+// Station slash command handler - AI-powered multi-source search with intelligent planning
 slackApp.command('/station', async ({ command, ack, respond, context }) => {
   await ack();
   
@@ -126,16 +126,21 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     const teamId = context.teamId;
     const team = await Team.findById(teamId);
     
-    await respond('🤖 Analyzing your request and searching across Salesforce & Jira...');
-    
     const multiSourceService = new MultiSourceService(team);
-    const results = await multiSourceService.searchBothSources(userPrompt);
-    const formattedResponse = multiSourceService.formatCombinedResults(results, userPrompt);
     
+    // Use intelligent planning with multiple messages
+    const results = await multiSourceService.searchWithIntelligentPlanning(
+      userPrompt, 
+      async (message) => await respond(message)
+    );
+    
+    // Send final results
+    const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt);
     await respond(formattedResponse);
+    
   } catch (error) {
     console.error('Station command error:', error);
-    await respond(`AI search failed: ${error.message}`);
+    await respond(`❌ **AI search failed:** ${error.message}`);
   }
 });
 

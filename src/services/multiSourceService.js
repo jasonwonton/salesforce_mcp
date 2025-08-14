@@ -66,50 +66,122 @@ class MultiSourceService {
     return words.slice(0, 3); // Take first 3 meaningful words
   }
 
-  async searchBothSources(userPrompt) {
-    // Generate intelligent search terms
+  async searchWithIntelligentPlanning(userPrompt, respondCallback) {
+    // Step 1: AI Planning
+    await respondCallback('🤖 **AI Planning:** Analyzing your request...');
+    
     const searchTerms = await this.generateSearchTerms(userPrompt);
-    console.log(`Generated search terms for "${userPrompt}":`, searchTerms);
+    await respondCallback(`🧠 **AI Thinking:** I'll search for: ${searchTerms.map(term => `"${term}"`).join(', ')}`);
     
-    const allResults = {
-      salesforce: [],
-      jira: []
-    };
+    // Step 2: Check connections
+    await respondCallback('🔍 **Checking connections...**');
     
-    // Search with each term and combine results
-    for (const searchTerm of searchTerms) {
-      const promises = [];
-      
-      // Search Salesforce (if connected)
-      promises.push(
-        this.salesforceService.searchSupportTickets(searchTerm)
-          .catch(error => {
-            console.error(`Salesforce search failed for "${searchTerm}":`, error.message);
-            return [];
-          })
-      );
-      
-      // Search Jira
-      promises.push(
-        this.jiraService.searchIssues(searchTerm)
-          .catch(error => {
-            console.error(`Jira search failed for "${searchTerm}":`, error.message);
-            return [];
-          })
-      );
-
-      const [salesforceResults, jiraResults] = await Promise.all(promises);
-      
-      // Combine results (avoid duplicates)
-      allResults.salesforce = [...allResults.salesforce, ...salesforceResults];
-      allResults.jira = [...allResults.jira, ...jiraResults];
+    const connectionStatus = await this.checkConnections();
+    let statusMessage = '📊 **Connection Status:**\n';
+    
+    if (connectionStatus.salesforce.connected) {
+      statusMessage += '✅ Salesforce: Connected\n';
+    } else {
+      statusMessage += `❌ Salesforce: ${connectionStatus.salesforce.reason}\n`;
     }
     
-    // Remove duplicates
-    allResults.salesforce = this.removeDuplicates(allResults.salesforce, 'Id');
-    allResults.jira = this.removeDuplicates(allResults.jira, 'key');
+    if (connectionStatus.jira.connected) {
+      statusMessage += '✅ Jira: Connected';
+    } else {
+      statusMessage += `❌ Jira: ${connectionStatus.jira.reason}`;
+    }
     
-    return allResults;
+    await respondCallback(statusMessage);
+    
+    // Step 3: Search available sources
+    const searchPromises = [];
+    let searchMessage = '🔍 **Searching:**';
+    
+    if (connectionStatus.salesforce.connected) {
+      searchMessage += ' Salesforce';
+      searchPromises.push(this.searchSalesforce(searchTerms));
+    }
+    
+    if (connectionStatus.jira.connected) {
+      searchMessage += searchPromises.length > 0 ? ' + Jira' : ' Jira';
+      searchPromises.push(this.searchJira(searchTerms));
+    }
+    
+    if (searchPromises.length === 0) {
+      await respondCallback('❌ **No systems available to search.** Please connect at least one system.');
+      return { salesforce: [], jira: [], searchTerms, connectionStatus };
+    }
+    
+    await respondCallback(searchMessage + '...');
+    
+    // Execute searches
+    const results = await Promise.all(searchPromises);
+    
+    const finalResults = {
+      salesforce: connectionStatus.salesforce.connected ? results[connectionStatus.jira.connected ? 0 : 0] || [] : [],
+      jira: connectionStatus.jira.connected ? results[connectionStatus.salesforce.connected ? 1 : 0] || [] : [],
+      searchTerms,
+      connectionStatus
+    };
+    
+    return finalResults;
+  }
+
+  async checkConnections() {
+    const status = {
+      salesforce: { connected: false, reason: '' },
+      jira: { connected: false, reason: '' }
+    };
+    
+    // Check Salesforce
+    try {
+      if (!this.salesforceService.accessToken) {
+        status.salesforce.reason = 'Not connected - need to authorize';
+      } else {
+        status.salesforce.connected = true;
+      }
+    } catch (error) {
+      status.salesforce.reason = 'Connection error';
+    }
+    
+    // Check Jira
+    try {
+      if (!this.jiraService.baseUrl || this.jiraService.baseUrl === 'https://example.atlassian.net') {
+        status.jira.reason = 'Not configured';
+      } else {
+        status.jira.connected = true;
+      }
+    } catch (error) {
+      status.jira.reason = 'Connection error';
+    }
+    
+    return status;
+  }
+
+  async searchSalesforce(searchTerms) {
+    const allResults = [];
+    for (const searchTerm of searchTerms) {
+      try {
+        const results = await this.salesforceService.searchSupportTickets(searchTerm);
+        allResults.push(...results);
+      } catch (error) {
+        console.error(`Salesforce search failed for "${searchTerm}":`, error.message);
+      }
+    }
+    return this.removeDuplicates(allResults, 'Id');
+  }
+
+  async searchJira(searchTerms) {
+    const allResults = [];
+    for (const searchTerm of searchTerms) {
+      try {
+        const results = await this.jiraService.searchIssues(searchTerm);
+        allResults.push(...results);
+      } catch (error) {
+        console.error(`Jira search failed for "${searchTerm}":`, error.message);
+      }
+    }
+    return this.removeDuplicates(allResults, 'key');
   }
 
   removeDuplicates(array, idField) {
@@ -124,13 +196,15 @@ class MultiSourceService {
     });
   }
 
-  formatCombinedResults(results, userPrompt) {
+  formatFinalResults(results, userPrompt) {
+    const { salesforce, jira, searchTerms, connectionStatus } = results;
+    
     const blocks = [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*🤖 AI Search results for: "${userPrompt}"*`
+          text: `*📊 Final Results for: "${userPrompt}"*\n_Searched: ${searchTerms.join(', ')}_`
         }
       }
     ];
@@ -138,16 +212,16 @@ class MultiSourceService {
     let totalFound = 0;
 
     // Add Salesforce results
-    if (results.salesforce && results.salesforce.length > 0) {
+    if (salesforce && salesforce.length > 0) {
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Salesforce Cases (${results.salesforce.length}):*`
+          text: `*Salesforce Cases (${salesforce.length}):*`
         }
       });
 
-      results.salesforce.forEach(case_ => {
+      salesforce.forEach(case_ => {
         const customerName = case_.Account?.Name || 'Unknown Customer';
         const contactName = case_.Contact?.Name || 'No Contact';
         
@@ -178,7 +252,26 @@ class MultiSourceService {
       const jiraBlocks = this.jiraService.formatResultsForSlack(results.jira);
       blocks.push(...jiraBlocks);
       
-      totalFound += results.jira.length;
+      totalFound += jira.length;
+    }
+
+    // Add connection prompts for disconnected systems
+    if (!connectionStatus.salesforce.connected) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `💡 *Want more results?* Connect Salesforce to search support cases too!`
+        },
+        accessory: {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "Connect Salesforce"
+          },
+          url: `${process.env.APP_URL}/setup/salesforce`
+        }
+      });
     }
 
     // If no results found
@@ -187,7 +280,7 @@ class MultiSourceService {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "No tickets found in either Salesforce or Jira."
+          text: "No tickets found with those search terms."
         }
       });
     }
