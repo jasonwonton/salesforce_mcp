@@ -146,8 +146,13 @@ class MultiSourceService {
     
     // Check Jira
     try {
-      if (!this.jiraService.baseUrl || this.jiraService.baseUrl === 'https://example.atlassian.net') {
-        status.jira.reason = 'Not configured';
+      if (!this.jiraService.baseUrl || 
+          this.jiraService.baseUrl === 'https://example.atlassian.net' ||
+          !this.jiraService.username || 
+          this.jiraService.username === 'placeholder' ||
+          !this.jiraService.apiToken || 
+          this.jiraService.apiToken === 'placeholder') {
+        status.jira.reason = 'Not configured properly';
       } else {
         status.jira.connected = true;
       }
@@ -179,6 +184,10 @@ class MultiSourceService {
         allResults.push(...results);
       } catch (error) {
         console.error(`Jira search failed for "${searchTerm}":`, error.message);
+        // If there's a connection error, don't continue with other terms
+        if (error.message.includes('ENOTFOUND') || error.message.includes('authentication')) {
+          throw error;
+        }
       }
     }
     return this.removeDuplicates(allResults, 'key');
