@@ -32,7 +32,7 @@ class JiraService {
             maxResults: 5,
             fields: 'key,summary,status,assignee,created,priority,description,comment'
           },
-          timeout: 120000 // 2 minute timeout
+          timeout: 30000 // 30 second timeout
         }
       );
 
