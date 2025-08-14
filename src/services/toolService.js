@@ -295,49 +295,81 @@ Return ONLY JSON, no markdown.
     }
 
     try {
-      // Use the FIND query you mentioned!
-      const soslQuery = `FIND {${params.searchTerm}} RETURNING Account(Name, Id), Contact(Name, Email, Id), Case(CaseNumber, Subject, Status, Id), Opportunity(Name, StageName, Amount, Id)`;
+      // Validate search term
+      if (!params.searchTerm || params.searchTerm.trim() === '') {
+        return { toolName: 'search_all_objects', success: false, error: 'Search term is required' };
+      }
       
-      const response = await this.salesforceService.executeSOSLQuery(soslQuery);
+      // Parse search term - could be single word or multiple keywords
+      const keywords = params.searchTerm.split(' ').filter(word => word.length > 2);
       
-      // Parse SOSL results by object type
-      const results = {
+      const allResults = {
         accounts: [],
         contacts: [],
         cases: [],
         opportunities: []
       };
       
-      if (response.searchRecords) {
-        response.searchRecords.forEach(record => {
-          switch (record.attributes.type) {
-            case 'Account':
-              results.accounts.push(record);
-              break;
-            case 'Contact':
-              results.contacts.push(record);
-              break;
-            case 'Case':
-              results.cases.push(record);
-              break;
-            case 'Opportunity':
-              results.opportunities.push(record);
-              break;
+      let totalFound = 0;
+      
+      // Search one keyword at a time for better results
+      for (const keyword of keywords.slice(0, 3)) { // Limit to 3 keywords to avoid too many API calls
+        try {
+          const soslQuery = `FIND {${keyword}} RETURNING Account(Name, Id), Contact(Name, Email, Id), Case(CaseNumber, Subject, Status, Id), Opportunity(Name, StageName, Amount, Id)`;
+          
+          console.log(`Searching for keyword: ${keyword}`);
+          const response = await this.salesforceService.executeSOSLQuery(soslQuery);
+          
+          if (response.searchRecords && response.searchRecords.length > 0) {
+            response.searchRecords.forEach(record => {
+              // Avoid duplicates by checking if ID already exists
+              const recordId = record.Id;
+              
+              switch (record.attributes.type) {
+                case 'Account':
+                  if (!allResults.accounts.find(a => a.Id === recordId)) {
+                    allResults.accounts.push(record);
+                  }
+                  break;
+                case 'Contact':
+                  if (!allResults.contacts.find(c => c.Id === recordId)) {
+                    allResults.contacts.push(record);
+                  }
+                  break;
+                case 'Case':
+                  if (!allResults.cases.find(c => c.Id === recordId)) {
+                    allResults.cases.push(record);
+                  }
+                  break;
+                case 'Opportunity':
+                  if (!allResults.opportunities.find(o => o.Id === recordId)) {
+                    allResults.opportunities.push(record);
+                  }
+                  break;
+              }
+            });
+            
+            totalFound += response.searchRecords.length;
+            console.log(`Found ${response.searchRecords.length} results for "${keyword}"`);
           }
-        });
+        } catch (keywordError) {
+          console.error(`Search failed for keyword "${keyword}":`, keywordError.message);
+          continue; // Try next keyword
+        }
       }
       
       return {
         toolName: 'search_all_objects',
         success: true,
-        data: results,
-        count: response.searchRecords?.length || 0,
+        data: allResults,
+        count: totalFound,
         breakdown: {
-          accounts: results.accounts.length,
-          contacts: results.contacts.length,
-          cases: results.cases.length,
-          opportunities: results.opportunities.length
-        }
+          accounts: allResults.accounts.length,
+          contacts: allResults.contacts.length,
+          cases: allResults.cases.length,
+          opportunities: allResults.opportunities.length
+        },
+        searchStrategy: `Searched ${keywords.length} keywords individually: ${keywords.join(', ')}`
       };
     } catch (error) {
       return { toolName: 'search_all_objects', success: false, error: error.message };
