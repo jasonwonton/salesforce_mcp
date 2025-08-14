@@ -14,12 +14,11 @@ class SalesforceService {
 
     const query = `
       SELECT Id, CaseNumber, Subject, Status, CreatedDate, 
-             Account.Name, Contact.Name, Priority,
-             FLOOR((NOW() - CreatedDate)) as DaysWaiting
+             Account.Name, Contact.Name, Priority, Description
       FROM Case 
       WHERE (Subject LIKE '%${searchTerm}%' OR Description LIKE '%${searchTerm}%')
         AND Status != 'Closed'
-      ORDER BY CreatedDate ASC
+      ORDER BY CreatedDate DESC
       LIMIT 20
     `;
 
@@ -39,6 +38,13 @@ class SalesforceService {
 
       return response.data.records;
     } catch (error) {
+      console.error('Salesforce API error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        query: query,
+        url: `${this.instanceUrl}/services/data/v58.0/query`
+      });
+      
       if (error.response?.status === 401) {
         // Token expired, need to refresh
         throw new Error('Salesforce token expired. Please reconnect.');
