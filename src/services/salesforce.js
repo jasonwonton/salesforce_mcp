@@ -7,6 +7,32 @@ class SalesforceService {
     this.accessToken = team.salesforce_access_token;
   }
 
+  async executeSOQLQuery(query) {
+    if (!this.accessToken || !this.instanceUrl) {
+      throw new Error('Salesforce not connected for this team');
+    }
+
+    try {
+      const response = await axios.get(
+        `${this.instanceUrl}/services/data/v58.0/query`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          params: {
+            q: query
+          }
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error('SOQL query failed:', error.response?.data || error.message);
+      throw new Error(`SOQL query failed: ${error.response?.data?.message || error.message}`);
+    }
+  }
+
   async searchSupportTickets(searchTerm) {
     if (!this.accessToken || !this.instanceUrl) {
       throw new Error('Salesforce not connected for this team');
