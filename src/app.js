@@ -3,7 +3,7 @@ const express = require('express');
 const { App, ExpressReceiver } = require('@slack/bolt');
 const Team = require('./models/Team');
 const SalesforceService = require('./services/salesforce');
-const MCPService = require('./services/mcpService');
+const MultiSourceService = require('./services/multiSourceService');
 const oauthRoutes = require('./routes/oauth');
 const db = require('./database');
 
@@ -113,7 +113,7 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
 });
 
 // Station slash command handler - Multi-source search
-slackApp.command('/station', async ({ command, ack, respond }) => {
+slackApp.command('/station', async ({ command, ack, respond, context }) => {
   await ack();
   
   const searchTerm = command.text.trim();
@@ -123,12 +123,12 @@ slackApp.command('/station', async ({ command, ack, respond }) => {
   }
 
   try {
-    const mcpService = new MCPService();
-    await mcpService.initializeSalesforce();
-    await mcpService.initializeJira();
+    const teamId = context.teamId;
+    const team = await Team.findById(teamId);
     
-    const results = await mcpService.searchBothSources(searchTerm);
-    const formattedResponse = mcpService.formatCombinedResults(results);
+    const multiSourceService = new MultiSourceService(team);
+    const results = await multiSourceService.searchBothSources(searchTerm);
+    const formattedResponse = multiSourceService.formatCombinedResults(results, searchTerm);
     
     await respond(formattedResponse);
   } catch (error) {

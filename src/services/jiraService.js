@@ -1,0 +1,68 @@
+const axios = require('axios');
+
+class JiraService {
+  constructor() {
+    this.baseUrl = process.env.JIRA_URL;
+    this.username = process.env.JIRA_USERNAME;
+    this.apiToken = process.env.JIRA_API_TOKEN;
+  }
+
+  async searchIssues(searchTerm) {
+    if (!this.baseUrl || !this.username || !this.apiToken) {
+      throw new Error('Jira not configured. Please set JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN');
+    }
+
+    const jql = `text ~ "${searchTerm}" AND status != "Done" ORDER BY created DESC`;
+    
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/rest/api/2/search`,
+        {
+          headers: {
+            'Authorization': `Basic ${Buffer.from(`${this.username}:${this.apiToken}`).toString('base64')}`,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          params: {
+            jql: jql,
+            maxResults: 10,
+            fields: 'key,summary,status,assignee,created,priority'
+          }
+        }
+      );
+
+      return response.data.issues || [];
+    } catch (error) {
+      if (error.response?.status === 401) {
+        throw new Error('Jira authentication failed. Please check your credentials.');
+      }
+      console.error('Jira API error:', error.response?.data || error.message);
+      throw new Error(`Jira search failed: ${error.message}`);
+    }
+  }
+
+  formatResultsForSlack(issues) {
+    if (!issues || issues.length === 0) {
+      return [];
+    }
+
+    const blocks = [];
+
+    issues.forEach(issue => {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `🟠 *${issue.key}* - ${issue.fields.summary}\n` +
+                `Status: ${issue.fields.status.name}\n` +
+                `Assignee: ${issue.fields.assignee?.displayName || 'Unassigned'}\n` +
+                `Priority: ${issue.fields.priority?.name || 'None'}`
+        }
+      });
+    });
+
+    return blocks;
+  }
+}
+
+module.exports = JiraService;
