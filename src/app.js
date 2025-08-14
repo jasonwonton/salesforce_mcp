@@ -1,29 +1,25 @@
 require('dotenv').config();
 const express = require('express');
-const { App } = require('@slack/bolt');
+const { App, ExpressReceiver } = require('@slack/bolt');
 const Team = require('./models/Team');
 const SalesforceService = require('./services/salesforce');
 const oauthRoutes = require('./routes/oauth');
 const db = require('./database');
 
-const app = express();
 const port = process.env.PORT || 3000;
 
-// Slack Bolt App
-const slackApp = new App({
+// Create Express receiver for Slack Bolt
+const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   clientId: process.env.SLACK_CLIENT_ID,
   clientSecret: process.env.SLACK_CLIENT_SECRET,
   stateSecret: 'my-state-secret',
-  customRoutes: [
-    {
-      path: '/slack/events',
-      method: ['POST'],
-      handler: (req, res) => {
-        res.send('');
-      }
-    }
-  ],
+  processBeforeResponse: true
+});
+
+// Slack Bolt App
+const slackApp = new App({
+  receiver,
   installationStore: {
     storeInstallation: async (installation) => {
       const teamId = installation.team.id;
@@ -131,6 +127,9 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
   }
 });
 
+// Get the Express app from receiver
+const app = receiver.app;
+
 // Express routes
 app.use(express.json());
 app.use('/oauth', oauthRoutes);
@@ -168,10 +167,8 @@ app.get('/setup/salesforce', (req, res) => {
   `);
 });
 
-// Use Express to handle HTTP, Slack Bolt for events
-app.use('/slack/events', slackApp.receiver.router);
-
-// Start Express server
-app.listen(port, () => {
+// Start the server
+(async () => {
+  await slackApp.start(port);
   console.log(`⚡️ Salesforce Support Ticket Bot is running on port ${port}!`);
-});
+})();
