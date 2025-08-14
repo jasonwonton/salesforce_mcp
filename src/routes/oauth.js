@@ -1,8 +1,21 @@
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 const Team = require('../models/Team');
 
 const router = express.Router();
+
+// PKCE helper functions
+function generateCodeVerifier() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function generateCodeChallenge(codeVerifier) {
+  return crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+}
+
+// Store code verifiers temporarily (in production, use Redis or database)
+const codeVerifiers = new Map();
 
 // Slack OAuth installation flow
 router.get('/slack/install', (req, res) => {
@@ -73,26 +86,78 @@ router.get('/salesforce/connect/:teamId', (req, res) => {
   }
   
   const redirectUri = `${process.env.APP_URL}/oauth/salesforce/callback`;
-  const salesforceAuthUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=${process.env.SALESFORCE_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${teamId}`;
+  
+  // Generate PKCE parameters
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+  
+  // Store code verifier for later use
+  codeVerifiers.set(teamId, codeVerifier);
+  
+  // Build auth URL with PKCE
+  const authParams = new URLSearchParams({
+    response_type: 'code',
+    client_id: process.env.SALESFORCE_CLIENT_ID,
+    redirect_uri: redirectUri,
+    state: teamId,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256'
+  });
+  
+  const salesforceAuthUrl = `https://login.salesforce.com/services/oauth2/authorize?${authParams}`;
   
   console.log(`Salesforce Auth URL: ${salesforceAuthUrl}`);
   console.log(`Redirect URI: ${redirectUri}`);
+  console.log(`Code Challenge: ${codeChallenge}`);
   
   res.redirect(salesforceAuthUrl);
 });
 
 router.get('/salesforce/callback', async (req, res) => {
-  const { code, state: teamId } = req.query;
+  const { code, state: teamId, error } = req.query;
+  
+  // Handle OAuth errors
+  if (error) {
+    console.error('Salesforce OAuth error:', error, req.query.error_description);
+    res.status(400).send(`Salesforce authorization failed: ${req.query.error_description || error}`);
+    return;
+  }
+  
+  if (!code || !teamId) {
+    res.status(400).send('Missing authorization code or team ID');
+    return;
+  }
   
   try {
-    // Exchange code for Salesforce tokens
-    const response = await axios.post('https://login.salesforce.com/services/oauth2/token', {
+    // Get the stored code verifier
+    const codeVerifier = codeVerifiers.get(teamId);
+    if (!codeVerifier) {
+      throw new Error('Code verifier not found - session may have expired');
+    }
+    
+    // Clean up the stored code verifier
+    codeVerifiers.delete(teamId);
+    
+    // Exchange code for Salesforce tokens with PKCE
+    const tokenData = {
       grant_type: 'authorization_code',
       client_id: process.env.SALESFORCE_CLIENT_ID,
-      client_secret: process.env.SALESFORCE_CLIENT_SECRET,
       redirect_uri: `${process.env.APP_URL}/oauth/salesforce/callback`,
-      code: code
-    });
+      code: code,
+      code_verifier: codeVerifier
+    };
+    
+    console.log('Token exchange data:', { ...tokenData, code_verifier: '[REDACTED]' });
+    
+    const response = await axios.post('https://login.salesforce.com/services/oauth2/token', 
+      new URLSearchParams(tokenData),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
+        }
+      }
+    );
 
     const { access_token, refresh_token, instance_url } = response.data;
 
