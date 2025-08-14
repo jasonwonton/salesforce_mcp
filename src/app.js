@@ -113,13 +113,84 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
   }
 });
 
-// Station slash command handler - AI-powered multi-source search with intelligent planning
+// Store for pending plans (in production, use Redis or database)
+global.pendingPlans = global.pendingPlans || {};
+
+// Station slash command handler - AI-powered multi-source search with Claude Code-like planning
 slackApp.command('/station', async ({ command, ack, respond, context }) => {
   await ack();
   
   const userPrompt = command.text.trim();
   if (!userPrompt) {
-    await respond('Usage: `/station [describe what you\'re looking for]`\nExample: `/station customer billing issues from last week`\n\nOr ask follow-up questions: `/station ask what are the priority issues?`');
+    await respond('Usage: `/station [describe what you\'re looking for]`\nExample: `/station customer billing issues from last week`\n\nOr approve a plan: `/station approve` to execute the proposed plan.\nOr ask follow-up questions: `/station ask [your question]`');
+    return;
+  }
+
+  const teamId = context.teamId;
+  const userId = command.user_id;
+  const planKey = `${teamId}_${userId}`;
+
+  // Check if user is approving a plan
+  if (userPrompt.toLowerCase() === 'approve') {
+    const pendingPlan = global.pendingPlans[planKey];
+    if (!pendingPlan) {
+      await respond({
+        text: "❌ No pending plan to approve. Create a plan first by asking me to search for something.",
+        response_type: "ephemeral"
+      });
+      return;
+    }
+
+    // Execute the approved plan
+    await respond({
+      text: "✅ **Plan approved!** Executing tools...",
+      response_type: "ephemeral"
+    });
+
+    try {
+      const toolService = new ToolService(pendingPlan.team);
+      
+      // Execute each tool and show progress
+      const toolResults = [];
+      let progressText = "🚀 **Executing Plan:**\n\n";
+      
+      for (let i = 0; i < pendingPlan.toolPlan.selectedTools.length; i++) {
+        const toolCall = pendingPlan.toolPlan.selectedTools[i];
+        
+        // Show current tool execution
+        progressText += `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...\n`;
+        await respond({
+          text: progressText,
+          response_type: "in_channel"
+        });
+        
+        const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
+        toolResults.push(result);
+        
+        // Update progress
+        const status = result.success ? "✅" : "❌";
+        progressText = progressText.replace(`⏳ **Step ${i + 1}:**`, `${status} **Step ${i + 1}:**`);
+      }
+      
+      // Format final results
+      let finalResponse = progressText + "\n📋 **Results:**\n\n";
+      finalResponse += formatToolResults(toolResults);
+      
+      // Add conversation continuation
+      finalResponse += "\n💬 **Continue the conversation:** Type `/station ask [question]` to analyze these results further.";
+      
+      await respond({
+        text: finalResponse,
+        response_type: "in_channel"
+      });
+      
+      // Clear the pending plan
+      delete global.pendingPlans[planKey];
+      
+    } catch (error) {
+      console.error('Plan execution error:', error);
+      await respond(`❌ **Plan execution failed:** ${error.message}`);
+    }
     return;
   }
 
@@ -156,7 +227,7 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
       const aiResponse = await multiSourceService.answerFollowUpQuestion(question, results);
       
       await respond({
-        text: `💬 **AI Answer:** ${aiResponse}`,
+        text: `💬 **AI Answer:** ${aiResponse}\n\n🔄 **Continue:** Ask another question with \`/station ask [question]\``,
         response_type: "in_channel"
       });
       
@@ -167,124 +238,364 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     return;
   }
 
-  // Tool-based approach like MCP
+  // Planning phase - like Claude Code
   await respond({
-    text: "🤖 AI is selecting tools to help you...",
+    text: "🧠 **AI is analyzing your request and creating a plan...**",
     response_type: "ephemeral"
   });
 
   try {
-    const teamId = context.teamId;
     let team = null;
-    
     try {
       team = await Team.findById(teamId);
-      console.log('Team loaded successfully:', {
-        teamId,
-        hasTeam: !!team,
-        hasSalesforce: !!(team && team.salesforce_access_token)
-      });
     } catch (error) {
       console.error('Database connection failed:', error.message);
     }
     
     const toolService = new ToolService(team);
     
-    // Step 1: AI selects which tools to use (like MCP)
-    const toolPlan = await toolService.analyzeRequestAndSelectTools(userPrompt);
+    // Check if there's an existing plan to refine
+    const existingPlan = global.pendingPlans[planKey];
+    let contextPrompt = userPrompt;
     
-    // Step 2: Execute the selected tools
-    const toolResults = [];
-    for (const toolCall of toolPlan.selectedTools) {
-      const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
-      toolResults.push(result);
+    if (existingPlan) {
+      // This is a plan refinement
+      contextPrompt = `Original request: "${existingPlan.userPrompt}"\n\nPrevious plan: ${existingPlan.toolPlan.reasoning}\n\nRefinement request: "${userPrompt}"\n\nPlease create a new plan incorporating this feedback.`;
     }
     
-    // Step 3: Format response based on tool results
-    let responseText = `🧠 **AI Tool Selection:** ${toolPlan.reasoning}\n\n`;
+    // Step 1: AI creates a plan (like Claude Code planning)
+    const toolPlan = await toolService.analyzeRequestAndSelectTools(contextPrompt);
     
-    for (const result of toolResults) {
-      if (result.toolName === 'conversational_response') {
-        responseText = `💬 ${result.message}`;
-        break; // Skip other results if conversational
-      } else if (result.success) {
-        responseText += `🔍 **${result.toolName}**: Found ${result.count} results\n`;
-        
-        // Handle multi-object search results
-        if (result.toolName === 'search_all_objects' && result.data) {
-          if (result.breakdown) {
-            responseText += `📊 **Breakdown:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
-          }
-          
-          // Show cases first
-          if (result.data.cases && result.data.cases.length > 0) {
-            responseText += `📋 **Cases:**\n`;
-            result.data.cases.slice(0, 3).forEach((case_, index) => {
-              responseText += `${index + 1}. ${case_.CaseNumber}: ${case_.Subject}\n`;
-            });
-          }
-          
-          // Show accounts
-          if (result.data.accounts && result.data.accounts.length > 0) {
-            responseText += `🏢 **Accounts:**\n`;
-            result.data.accounts.slice(0, 3).forEach((account, index) => {
-              responseText += `${index + 1}. ${account.Name}\n`;
-            });
-          }
-          
-          // Show opportunities
-          if (result.data.opportunities && result.data.opportunities.length > 0) {
-            responseText += `💰 **Opportunities:**\n`;
-            result.data.opportunities.slice(0, 2).forEach((opp, index) => {
-              responseText += `${index + 1}. ${opp.Name} (${opp.StageName})\n`;
-            });
-          }
-        } 
-        // Handle deep analysis results
-        else if (result.analysis === 'deep') {
-          if (result.toolName === 'analyze_case_details') {
-            responseText += `📋 **Case:** ${result.caseData.CaseNumber} - ${result.caseData.Subject}\n`;
-            responseText += `🏢 **Account:** ${result.caseData.Account?.Name}\n`;
-            responseText += `📊 **Related Cases:** ${result.relatedCases}\n\n`;
-            responseText += `🤖 **AI Analysis:**\n${result.aiAnalysis}\n`;
-          } else if (result.toolName === 'analyze_account_health') {
-            responseText += `🏢 **Account:** ${result.account.Name} (${result.account.Industry})\n`;
-            responseText += `📊 **Support History:** ${result.caseCount} cases, ${result.opportunityCount} opportunities\n\n`;
-            responseText += `🤖 **Health Analysis:**\n${result.aiAnalysis}\n`;
-          }
-        }
-        // Handle trend analysis
-        else if (result.analysis === 'trends') {
-          responseText += `📈 **Analysis Type:** ${result.analysisType}\n`;
-          responseText += `📅 **Period:** ${result.timeframe}\n`;
-          responseText += `📊 **Data Points:** ${result.dataPoints}\n\n`;
-          responseText += `🤖 **Trend Analysis:**\n${result.aiAnalysis}\n`;
-        }
-        // Handle single-object results
-        else if (result.data && result.data.length > 0) {
-          result.data.slice(0, 5).forEach((item, index) => {
-            if (item.CaseNumber) {
-              responseText += `${index + 1}. ${item.CaseNumber}: ${item.Subject}\n`;
-            } else if (item.Name) {
-              responseText += `${index + 1}. ${item.Name}\n`;
-            }
-          });
-        }
-        responseText += '\n';
-      } else {
-        responseText += `❌ **${result.toolName}**: ${result.error}\n\n`;
+    // Store the plan for approval
+    global.pendingPlans[planKey] = {
+      userPrompt: existingPlan ? existingPlan.userPrompt : userPrompt,
+      refinementRequest: existingPlan ? userPrompt : null,
+      toolPlan,
+      team,
+      timestamp: Date.now()
+    };
+    
+    // Present the plan for approval (like Claude Code)
+    const displayPrompt = existingPlan ? existingPlan.userPrompt : userPrompt;
+    let planText = `📋 **${existingPlan ? 'Refined Plan' : 'Plan'} for:** "${displayPrompt}"\n\n`;
+    
+    if (existingPlan) {
+      planText += `💭 **Your refinement:** "${userPrompt}"\n\n`;
+    }
+    
+    planText += `🧠 **AI Reasoning:** ${toolPlan.reasoning}\n\n`;
+    planText += `🔧 **Proposed Tools:**\n`;
+    
+    toolPlan.selectedTools.forEach((tool, index) => {
+      planText += `${index + 1}. **${tool.toolName}** - ${getToolDescription(tool.toolName)}\n`;
+      if (tool.parameters && Object.keys(tool.parameters).length > 0) {
+        planText += `   Parameters: ${JSON.stringify(tool.parameters)}\n`;
       }
-    }
+    });
+    
+    planText += `\n✅ **Ready to proceed?**`;
     
     await respond({
-      text: responseText,
-      response_type: "in_channel"
+      text: planText,
+      response_type: "in_channel",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: planText
+          }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "✅ Execute Plan"
+              },
+              value: planKey,
+              action_id: "approve_plan",
+              style: "primary"
+            },
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "💭 Refine Plan"
+              },
+              value: planKey,
+              action_id: "refine_plan"
+            },
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "❌ Cancel"
+              },
+              value: planKey,
+              action_id: "cancel_plan",
+              style: "danger"
+            }
+          ]
+        }
+      ]
     });
     
   } catch (error) {
-    console.error('Tool-based search error:', error);
-    await respond(`❌ **AI tool selection failed:** ${error.message}`);
+    console.error('Planning error:', error);
+    await respond(`❌ **Planning failed:** ${error.message}`);
   }
+});
+
+// Helper function to get tool descriptions
+function getToolDescription(toolName) {
+  const descriptions = {
+    'search_recent_cases': 'Search recent Salesforce cases',
+    'search_cases_by_keywords': 'Search cases by specific keywords',
+    'search_all_objects': 'Search across all Salesforce objects',
+    'search_accounts': 'Search for Salesforce accounts',
+    'get_account_health': 'Find accounts with health issues',
+    'search_opportunities': 'Search deals/opportunities',
+    'search_jira_issues': 'Search Jira tickets and issues',
+    'analyze_case_details': 'Deep analysis of specific case',
+    'analyze_account_health': 'Deep dive into account health',
+    'analyze_pattern_trends': 'AI analysis of patterns and trends',
+    'conversational_response': 'Provide helpful guidance'
+  };
+  return descriptions[toolName] || 'Execute tool';
+}
+
+// Helper function to format tool results
+function formatToolResults(toolResults) {
+  let responseText = '';
+  
+  for (const result of toolResults) {
+    if (result.toolName === 'conversational_response') {
+      responseText = `💬 ${result.message}`;
+      break;
+    } else if (result.success) {
+      responseText += `🔍 **${result.toolName}**: Found ${result.count} results\n`;
+      
+      // Handle multi-object search results
+      if (result.toolName === 'search_all_objects' && result.data) {
+        if (result.breakdown) {
+          responseText += `📊 **Breakdown:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
+        }
+        
+        // Show cases first
+        if (result.data.cases && result.data.cases.length > 0) {
+          responseText += `📋 **Cases:**\n`;
+          result.data.cases.slice(0, 3).forEach((case_, index) => {
+            responseText += `${index + 1}. ${case_.CaseNumber}: ${case_.Subject}\n`;
+          });
+        }
+        
+        // Show accounts
+        if (result.data.accounts && result.data.accounts.length > 0) {
+          responseText += `🏢 **Accounts:**\n`;
+          result.data.accounts.slice(0, 3).forEach((account, index) => {
+            responseText += `${index + 1}. ${account.Name}\n`;
+          });
+        }
+        
+        // Show opportunities
+        if (result.data.opportunities && result.data.opportunities.length > 0) {
+          responseText += `💰 **Opportunities:**\n`;
+          result.data.opportunities.slice(0, 2).forEach((opp, index) => {
+            responseText += `${index + 1}. ${opp.Name} (${opp.StageName})\n`;
+          });
+        }
+      } 
+      // Handle deep analysis results
+      else if (result.analysis === 'deep') {
+        if (result.toolName === 'analyze_case_details') {
+          responseText += `📋 **Case:** ${result.caseData.CaseNumber} - ${result.caseData.Subject}\n`;
+          responseText += `🏢 **Account:** ${result.caseData.Account?.Name}\n`;
+          responseText += `📊 **Related Cases:** ${result.relatedCases}\n\n`;
+          responseText += `🤖 **AI Analysis:**\n${result.aiAnalysis}\n`;
+        } else if (result.toolName === 'analyze_account_health') {
+          responseText += `🏢 **Account:** ${result.account.Name} (${result.account.Industry})\n`;
+          responseText += `📊 **Support History:** ${result.caseCount} cases, ${result.opportunityCount} opportunities\n\n`;
+          responseText += `🤖 **Health Analysis:**\n${result.aiAnalysis}\n`;
+        }
+      }
+      // Handle trend analysis
+      else if (result.analysis === 'trends') {
+        responseText += `📈 **Analysis Type:** ${result.analysisType}\n`;
+        responseText += `📅 **Period:** ${result.timeframe}\n`;
+        responseText += `📊 **Data Points:** ${result.dataPoints}\n\n`;
+        responseText += `🤖 **Trend Analysis:**\n${result.aiAnalysis}\n`;
+      }
+      // Handle single-object results
+      else if (result.data && result.data.length > 0) {
+        result.data.slice(0, 5).forEach((item, index) => {
+          if (item.CaseNumber) {
+            responseText += `${index + 1}. ${item.CaseNumber}: ${item.Subject}\n`;
+          } else if (item.Name) {
+            responseText += `${index + 1}. ${item.Name}\n`;
+          }
+        });
+      }
+      responseText += '\n';
+    } else {
+      responseText += `❌ **${result.toolName}**: ${result.error}\n\n`;
+    }
+  }
+  
+  return responseText;
+}
+
+// Handle plan approval button
+slackApp.action('approve_plan', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  const planKey = body.actions[0].value;
+  const pendingPlan = global.pendingPlans[planKey];
+  
+  if (!pendingPlan) {
+    await respond({
+      text: "❌ Plan expired or not found. Please create a new plan.",
+      response_type: "ephemeral"
+    });
+    return;
+  }
+
+  // Execute the approved plan
+  await respond({
+    text: "✅ **Plan approved!** Executing tools...",
+    response_type: "ephemeral"
+  });
+
+  try {
+    const toolService = new ToolService(pendingPlan.team);
+    
+    // Execute each tool and show progress
+    const toolResults = [];
+    let progressText = "🚀 **Executing Plan:**\n\n";
+    
+    for (let i = 0; i < pendingPlan.toolPlan.selectedTools.length; i++) {
+      const toolCall = pendingPlan.toolPlan.selectedTools[i];
+      
+      // Show current tool execution
+      progressText += `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...\n`;
+      await respond({
+        text: progressText,
+        response_type: "in_channel"
+      });
+      
+      const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
+      toolResults.push(result);
+      
+      // Update progress
+      const status = result.success ? "✅" : "❌";
+      progressText = progressText.replace(`⏳ **Step ${i + 1}:**`, `${status} **Step ${i + 1}:**`);
+    }
+    
+    // Format final results
+    let finalResponse = progressText + "\n📋 **Results:**\n\n";
+    finalResponse += formatToolResults(toolResults);
+    
+    // Add conversation continuation buttons
+    await respond({
+      text: finalResponse,
+      response_type: "in_channel",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: finalResponse
+          }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "💬 Ask AI Question"
+              },
+              value: "ask_question",
+              action_id: "prompt_question"
+            },
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "🔍 New Search"
+              },
+              value: "new_search",
+              action_id: "prompt_new_search"
+            }
+          ]
+        }
+      ]
+    });
+    
+    // Clear the pending plan
+    delete global.pendingPlans[planKey];
+    
+  } catch (error) {
+    console.error('Plan execution error:', error);
+    await respond(`❌ **Plan execution failed:** ${error.message}`);
+  }
+});
+
+// Handle plan refinement button
+slackApp.action('refine_plan', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  const planKey = body.actions[0].value;
+  const pendingPlan = global.pendingPlans[planKey];
+  
+  if (!pendingPlan) {
+    await respond({
+      text: "❌ Plan expired or not found. Please create a new plan.",
+      response_type: "ephemeral"
+    });
+    return;
+  }
+  
+  await respond({
+    text: `💭 **Refine the plan for:** "${pendingPlan.userPrompt}"\n\n**Current plan:**\n${pendingPlan.toolPlan.reasoning}\n\n**What changes would you like?**\n\nExamples:\n• "Also search for opportunities"\n• "Focus only on high priority cases"\n• "Include account health analysis"\n• "Search last 30 days instead of today"\n\n**Type:** \`/station [your refinement request]\` to update the plan`,
+    response_type: "ephemeral"
+  });
+});
+
+// Handle plan cancellation button
+slackApp.action('cancel_plan', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  const planKey = body.actions[0].value;
+  delete global.pendingPlans[planKey];
+  
+  await respond({
+    text: "❌ **Plan cancelled.** You can create a new plan by describing what you're looking for with `/station [your request]`.",
+    response_type: "ephemeral"
+  });
+});
+
+// Handle question prompting button
+slackApp.action('prompt_question', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  await respond({
+    text: "💬 **What would you like to ask about the results?**\n\nExample questions:\n• What are the main issues?\n• Which cases need immediate attention?\n• What patterns do you see?\n\nType: `/station ask [your question]`",
+    response_type: "ephemeral"
+  });
+});
+
+// Handle new search prompting button  
+slackApp.action('prompt_new_search', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  await respond({
+    text: "🔍 **Ready for a new search!**\n\nDescribe what you're looking for:\n• Recent billing issues\n• Account health for [company]\n• Open opportunities this month\n• Support trends\n\nType: `/station [your request]`",
+    response_type: "ephemeral"
+  });
 });
 
 // Handle interactive button clicks for follow-up questions
