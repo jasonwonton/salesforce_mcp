@@ -122,6 +122,9 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     return;
   }
 
+  // Send immediate response to avoid timeout
+  await respond('🤖 **AI Agent Starting** - analyzing your request and searching multiple systems...');
+
   try {
     const teamId = context.teamId;
     let team = null;
@@ -131,19 +134,19 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
       team = await Team.findById(teamId);
     } catch (error) {
       console.error('Database connection failed, continuing without team data:', error.message);
-      await respond('⚠️ **Database temporarily unavailable** - searching with limited functionality...');
     }
     
     const multiSourceService = new MultiSourceService(team);
     
-    // Use intelligent planning with multiple messages
+    // Collect all progress messages instead of sending them individually
+    const progressMessages = [];
     const results = await multiSourceService.searchWithIntelligentPlanning(
       userPrompt, 
-      async (message) => await respond(message)
+      async (message) => progressMessages.push(message)
     );
     
-    // Send final results
-    const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt);
+    // Send combined final response with all progress and results
+    const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt, progressMessages);
     await respond(formattedResponse);
     
   } catch (error) {

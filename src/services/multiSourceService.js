@@ -246,7 +246,7 @@ class MultiSourceService {
     });
   }
 
-  formatFinalResults(results, userPrompt) {
+  formatFinalResults(results, userPrompt, progressMessages = []) {
     const { salesforce, jira, searchTerms, connectionStatus } = results;
     
     const blocks = [
@@ -254,10 +254,21 @@ class MultiSourceService {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*📊 Final Results for: "${userPrompt}"*\n_Searched: ${searchTerms.join(', ')}_`
+          text: `*🤖 AI Search Complete for: "${userPrompt}"*`
         }
       }
     ];
+
+    // Add progress summary
+    if (progressMessages.length > 0) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*🧠 AI Process:*\n${progressMessages.slice(0, 5).join('\n')}`
+        }
+      });
+    }
 
     let totalFound = 0;
 
