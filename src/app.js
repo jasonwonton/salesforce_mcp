@@ -105,6 +105,12 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
   }
 });
 
+// Station slash command handler
+slackApp.command('/station', async ({ command, ack, respond }) => {
+  await ack();
+  await respond('hello world');
+});
+
 // Get the Express app from receiver
 const app = receiver.app;
 
