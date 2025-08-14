@@ -130,7 +130,8 @@ class MultiSourceService {
       salesforce: connectionStatus.salesforce.connected ? results[connectionStatus.jira.connected ? 0 : 0] || [] : [],
       jira: connectionStatus.jira.connected ? results[connectionStatus.salesforce.connected ? 1 : 0] || [] : [],
       searchTerms,
-      connectionStatus
+      connectionStatus,
+      teamId: this.team?.id
     };
     
     return finalResults;
@@ -310,15 +311,15 @@ class MultiSourceService {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `💡 *Want more results?* Connect Salesforce to search support cases too!`
+          text: `💡 *Want to search Salesforce too?* Click below to authorize your Salesforce account!`
         },
         accessory: {
           type: "button",
           text: {
             type: "plain_text",
-            text: "Connect Salesforce"
+            text: "🔗 Connect Salesforce"
           },
-          url: `${process.env.APP_URL}/setup/salesforce`
+          url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId || 'unknown'}`
         }
       });
     }
