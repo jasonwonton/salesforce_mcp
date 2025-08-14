@@ -19,11 +19,17 @@ const receiver = new ExpressReceiver({
     storeInstallation: async (installation) => {
       const teamId = installation.team.id;
       console.log('Storing installation for team:', teamId);
+      // For now, just store in memory (this will be lost on restart)
+      global.installations = global.installations || {};
+      global.installations[teamId] = installation;
       return true;
     },
     fetchInstallation: async (installQuery) => {
       console.log('Fetching installation for:', installQuery);
-      return null;
+      global.installations = global.installations || {};
+      const installation = global.installations[installQuery.teamId];
+      console.log('Found installation:', !!installation);
+      return installation || null;
     }
   },
   processBeforeResponse: true
