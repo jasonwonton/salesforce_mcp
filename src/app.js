@@ -112,13 +112,13 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
   }
 });
 
-// Station slash command handler - Multi-source search
+// Station slash command handler - AI-powered multi-source search
 slackApp.command('/station', async ({ command, ack, respond, context }) => {
   await ack();
   
-  const searchTerm = command.text.trim();
-  if (!searchTerm) {
-    await respond('Usage: `/station [search term]` - searches both Salesforce and Jira');
+  const userPrompt = command.text.trim();
+  if (!userPrompt) {
+    await respond('Usage: `/station [describe what you\'re looking for]`\nExample: `/station customer billing issues from last week`');
     return;
   }
 
@@ -126,14 +126,16 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     const teamId = context.teamId;
     const team = await Team.findById(teamId);
     
+    await respond('🤖 Analyzing your request and searching across Salesforce & Jira...');
+    
     const multiSourceService = new MultiSourceService(team);
-    const results = await multiSourceService.searchBothSources(searchTerm);
-    const formattedResponse = multiSourceService.formatCombinedResults(results, searchTerm);
+    const results = await multiSourceService.searchBothSources(userPrompt);
+    const formattedResponse = multiSourceService.formatCombinedResults(results, userPrompt);
     
     await respond(formattedResponse);
   } catch (error) {
     console.error('Station command error:', error);
-    await respond(`Search failed: ${error.message}`);
+    await respond(`AI search failed: ${error.message}`);
   }
 });
 
