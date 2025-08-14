@@ -4,6 +4,7 @@ const { App, ExpressReceiver } = require('@slack/bolt');
 const Team = require('./models/Team');
 const SalesforceService = require('./services/salesforce');
 const MultiSourceService = require('./services/multiSourceService');
+const MCPClient = require('./services/mcpClient');
 const oauthRoutes = require('./routes/oauth');
 const db = require('./database');
 
@@ -112,7 +113,7 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
   }
 });
 
-// Station slash command handler - AI-powered multi-source search with intelligent planning
+// Station slash command handler - Now uses MCP for Claude AI intelligence
 slackApp.command('/station', async ({ command, ack, respond, context }) => {
   await ack();
   
@@ -128,87 +129,132 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     
     // Send immediate response to avoid timeout
     await respond({
-      text: "🤖 AI is analyzing your question...",
+      text: "🤖 Claude AI is analyzing your question via MCP...",
       response_type: "ephemeral"
     });
 
     try {
       const teamId = context.teamId;
-      let team = null;
+      const mcpClient = new MCPClient();
       
-      try {
-        team = await Team.findById(teamId);
-      } catch (error) {
-        console.error('Database connection failed, continuing without team data:', error.message);
-      }
-      
-      const multiSourceService = new MultiSourceService(team);
-      
-      // Get recent search context (this is simplified - in production you'd store this in a cache/database)
-      const progressMessages = [];
-      const results = await multiSourceService.searchWithIntelligentPlanning(
-        "recent tickets", // Default search for context
-        async (message) => progressMessages.push(message)
-      );
-      
-      // Generate AI response to the follow-up question
-      const aiResponse = await multiSourceService.answerFollowUpQuestion(question, results);
+      // Use MCP to ask AI question
+      const result = await mcpClient.askAI(question, teamId);
       
       await respond({
-        text: `💬 **AI Answer:** ${aiResponse}`,
+        text: `💬 **Claude AI Answer:** ${result.content[0].text}`,
         response_type: "in_channel"
       });
       
     } catch (error) {
-      console.error('Ask command error:', error);
-      await respond(`❌ **AI question failed:** ${error.message}`);
+      console.error('MCP Ask command error:', error);
+      
+      // Fallback to original method if MCP fails
+      try {
+        const team = await Team.findById(context.teamId);
+        const multiSourceService = new MultiSourceService(team);
+        const results = await multiSourceService.searchWithIntelligentPlanning("recent tickets", () => {});
+        const aiResponse = await multiSourceService.answerFollowUpQuestion(question, results);
+        
+        await respond({
+          text: `💬 **Gemini AI Answer (fallback):** ${aiResponse}`,
+          response_type: "in_channel"
+        });
+      } catch (fallbackError) {
+        await respond(`❌ **AI question failed:** ${error.message}`);
+      }
     }
     return;
   }
 
-  // Regular search mode
-  // Send immediate response to avoid timeout
+  // Regular search mode - Use MCP for Claude AI intelligence
   await respond({
-    text: "🤖 AI Agent is analyzing your request...",
+    text: "🤖 Claude AI is analyzing your request via MCP...",
     response_type: "ephemeral"
   });
 
   try {
     const teamId = context.teamId;
-    let team = null;
+    const userId = context.userId;
+    const mcpClient = new MCPClient();
     
-    // Try to find team, but continue even if database fails
-    try {
-      team = await Team.findById(teamId);
-      console.log('Team loaded successfully:', {
-        teamId,
-        hasTeam: !!team,
-        hasSalesforce: !!(team && team.salesforce_access_token),
-        salesforceUrl: team && team.salesforce_instance_url
+    // Use MCP station search (Claude AI intelligence)
+    const mcpResult = await mcpClient.searchWithStation(userPrompt, teamId, userId);
+    
+    // Parse the MCP result
+    const searchData = JSON.parse(mcpResult.content[0].text);
+    
+    // Format response similar to original
+    let responseText = `🔍 **Claude AI Search Results:** "${userPrompt}"\n\n`;
+    
+    if (searchData.progress && searchData.progress.length > 0) {
+      responseText += `📋 **AI Planning:**\n`;
+      searchData.progress.forEach(step => {
+        responseText += `• ${step.message}\n`;
       });
-    } catch (error) {
-      console.error('Database connection failed, continuing without team data:', error.message);
+      responseText += '\n';
     }
     
-    const multiSourceService = new MultiSourceService(team);
+    const totalResults = searchData.results?.totalFound || 0;
     
-    // Collect all progress messages instead of sending them individually
-    const progressMessages = [];
-    const results = await multiSourceService.searchWithIntelligentPlanning(
-      userPrompt, 
-      async (message) => progressMessages.push(message)
-    );
-    
-    // Ensure teamId is available for UI links
-    results.teamId = teamId;
-    
-    // Send combined final response with all progress and results
-    const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt, progressMessages);
-    await respond(formattedResponse);
-    
+    if (totalResults > 0) {
+      responseText += `📊 **Found ${totalResults} results**\n\n`;
+      
+      // Salesforce results
+      if (searchData.results.salesforce?.cases?.length > 0) {
+        responseText += `🏢 **Salesforce Cases:**\n`;
+        searchData.results.salesforce.cases.slice(0, 5).forEach(case_ => {
+          responseText += `• ${case_.CaseNumber}: ${case_.Subject}\n`;
+        });
+        responseText += '\n';
+      }
+      
+      // Jira results
+      if (searchData.results.jira?.issues?.length > 0) {
+        responseText += `🎫 **Jira Issues:**\n`;
+        searchData.results.jira.issues.slice(0, 5).forEach(issue => {
+          responseText += `• ${issue.key}: ${issue.summary}\n`;
+        });
+        responseText += '\n';
+      }
+      
+      // AI Summary
+      if (searchData.results.summary) {
+        responseText += `🧠 **Claude AI Summary:** ${searchData.results.summary}`;
+      }
+    } else {
+      responseText += `❌ No results found for "${userPrompt}"`;
+    }
+
+    await respond({
+      text: responseText,
+      response_type: "in_channel"
+    });
+
   } catch (error) {
-    console.error('Station command error:', error);
-    await respond(`❌ **AI search failed:** ${error.message}`);
+    console.error('MCP Station command error:', error);
+    
+    // Fallback to original Gemini-based method
+    try {
+      const team = await Team.findById(context.teamId);
+      const multiSourceService = new MultiSourceService(team);
+      
+      const progressMessages = [];
+      const results = await multiSourceService.searchWithIntelligentPlanning(
+        userPrompt, 
+        async (message) => progressMessages.push(message)
+      );
+      
+      // Ensure teamId is available for UI links
+      results.teamId = context.teamId;
+      
+      // Send combined final response with all progress and results
+      const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt, progressMessages);
+      await respond(formattedResponse);
+      
+    } catch (fallbackError) {
+      console.error('Fallback method also failed:', fallbackError);
+      await respond(`❌ **Search failed:** Both Claude AI and Gemini AI methods failed. ${error.message}`);
+    }
   }
 });
 
