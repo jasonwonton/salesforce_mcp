@@ -65,6 +65,28 @@ class ToolService {
         }
       },
       {
+        name: 'analyze_case_details',
+        description: 'Get full case details and AI analysis of the situation, root cause, and recommendations',
+        parameters: {
+          caseId: 'Case ID or Case Number to analyze deeply'
+        }
+      },
+      {
+        name: 'analyze_account_health',
+        description: 'Deep dive into account health with case history analysis and risk assessment',
+        parameters: {
+          accountId: 'Account ID or Name to analyze'
+        }
+      },
+      {
+        name: 'analyze_pattern_trends',
+        description: 'AI analysis of patterns across multiple cases/accounts to identify trends',
+        parameters: {
+          analysisType: 'case_patterns|account_risks|support_trends',
+          timeframe: 'this_week|this_month|last_30_days'
+        }
+      },
+      {
         name: 'conversational_response',
         description: 'Provide a helpful conversational response without searching data',
         parameters: {
@@ -201,6 +223,12 @@ Return ONLY JSON, no markdown.
         return await this.searchOpportunities(parameters);
       case 'search_jira_issues':
         return await this.searchJiraIssues(parameters);
+      case 'analyze_case_details':
+        return await this.analyzeCaseDetails(parameters);
+      case 'analyze_account_health':
+        return await this.analyzeAccountHealth(parameters);
+      case 'analyze_pattern_trends':
+        return await this.analyzePatternTrends(parameters);
       case 'conversational_response':
         return await this.conversationalResponse(parameters);
       default:
@@ -406,12 +434,274 @@ Return ONLY JSON, no markdown.
     }
   }
 
+  async analyzeCaseDetails(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      // Get full case details including description, comments, history
+      const isId = params.caseId.startsWith('500') || params.caseId.length === 18;
+      const field = isId ? 'Id' : 'CaseNumber';
+      
+      const detailQuery = `
+        SELECT Id, CaseNumber, Subject, Description, Status, Priority, Type, Reason, Origin,
+               CreatedDate, LastModifiedDate, ClosedDate, IsClosed,
+               Account.Name, Account.Id, Account.Industry, Account.Type,
+               Contact.Name, Contact.Email, Contact.Phone,
+               Owner.Name, Owner.Email,
+               ParentId, Parent.CaseNumber
+        FROM Case 
+        WHERE ${field} = '${params.caseId}'
+      `;
+      
+      const caseResponse = await this.salesforceService.executeSOQLQuery(detailQuery);
+      
+      if (!caseResponse.records || caseResponse.records.length === 0) {
+        return { toolName: 'analyze_case_details', success: false, error: `Case ${params.caseId} not found` };
+      }
+      
+      const caseData = caseResponse.records[0];
+      
+      // Get related cases from same account for context
+      const relatedQuery = `
+        SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate
+        FROM Case 
+        WHERE AccountId = '${caseData.Account?.Id}' 
+        AND Id != '${caseData.Id}'
+        ORDER BY CreatedDate DESC 
+        LIMIT 10
+      `;
+      
+      const relatedResponse = await this.salesforceService.executeSOQLQuery(relatedQuery);
+      const relatedCases = relatedResponse.records || [];
+      
+      // AI analysis of the case
+      const analysisPrompt = `
+      Analyze this Salesforce support case and provide insights:
+
+      CASE DETAILS:
+      - Case Number: ${caseData.CaseNumber}
+      - Subject: ${caseData.Subject}
+      - Description: ${caseData.Description || 'No description'}
+      - Status: ${caseData.Status}
+      - Priority: ${caseData.Priority}
+      - Type: ${caseData.Type || 'Unknown'}
+      - Account: ${caseData.Account?.Name} (${caseData.Account?.Industry})
+      - Created: ${caseData.CreatedDate}
+      - Owner: ${caseData.Owner?.Name}
+
+      RELATED CASES FROM SAME ACCOUNT:
+      ${relatedCases.map(c => `- ${c.CaseNumber}: ${c.Subject} (${c.Status})`).join('\n')}
+
+      Please provide:
+      1. Root cause analysis
+      2. Severity assessment
+      3. Recommended next steps
+      4. Pattern analysis (if related cases show trends)
+      5. Risk assessment for the account
+
+      Be concise but insightful.
+      `;
+
+      const aiAnalysis = await this.callGeminiAPI(analysisPrompt);
+      
+      return {
+        toolName: 'analyze_case_details',
+        success: true,
+        caseData,
+        relatedCases: relatedCases.length,
+        aiAnalysis: aiAnalysis.replace(/```.*?\n|\n```/g, '').trim(),
+        analysis: 'deep'
+      };
+      
+    } catch (error) {
+      return { toolName: 'analyze_case_details', success: false, error: error.message };
+    }
+  }
+
+  async analyzeAccountHealth(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      // Get account details
+      const isId = params.accountId.startsWith('001') || params.accountId.length === 18;
+      const field = isId ? 'Id' : 'Name';
+      const searchValue = isId ? params.accountId : `%${params.accountId}%`;
+      const operator = isId ? '=' : 'LIKE';
+      
+      const accountQuery = `
+        SELECT Id, Name, Type, Industry, AnnualRevenue, NumberOfEmployees,
+               BillingCity, BillingState, Phone, Website, Description,
+               CreatedDate, LastModifiedDate
+        FROM Account 
+        WHERE ${field} ${operator} '${searchValue}'
+        LIMIT 1
+      `;
+      
+      const accountResponse = await this.salesforceService.executeSOQLQuery(accountQuery);
+      
+      if (!accountResponse.records || accountResponse.records.length === 0) {
+        return { toolName: 'analyze_account_health', success: false, error: `Account ${params.accountId} not found` };
+      }
+      
+      const account = accountResponse.records[0];
+      
+      // Get case history for health analysis
+      const caseHistoryQuery = `
+        SELECT Id, CaseNumber, Subject, Status, Priority, Type, CreatedDate, ClosedDate,
+               CASE WHEN ClosedDate != null THEN 
+                 DATEDIFF(ClosedDate, CreatedDate) 
+               ELSE 
+                 DATEDIFF(TODAY(), CreatedDate) 
+               END as DaysOpen
+        FROM Case 
+        WHERE AccountId = '${account.Id}'
+        ORDER BY CreatedDate DESC 
+        LIMIT 25
+      `;
+      
+      const caseResponse = await this.salesforceService.executeSOQLQuery(caseHistoryQuery);
+      const cases = caseResponse.records || [];
+      
+      // Get recent opportunities
+      const oppQuery = `
+        SELECT Id, Name, StageName, Amount, CloseDate, Type, LeadSource
+        FROM Opportunity 
+        WHERE AccountId = '${account.Id}'
+        ORDER BY CreatedDate DESC 
+        LIMIT 10
+      `;
+      
+      const oppResponse = await this.salesforceService.executeSOQLQuery(oppQuery);
+      const opportunities = oppResponse.records || [];
+      
+      // AI health analysis
+      const healthPrompt = `
+      Analyze the health of this Salesforce account:
+
+      ACCOUNT INFO:
+      - Name: ${account.Name}
+      - Industry: ${account.Industry}
+      - Type: ${account.Type}
+      - Revenue: ${account.AnnualRevenue || 'Unknown'}
+      - Employees: ${account.NumberOfEmployees || 'Unknown'}
+
+      SUPPORT HISTORY (last 25 cases):
+      ${cases.map(c => `- ${c.CaseNumber}: ${c.Subject} (${c.Status}, Priority: ${c.Priority})`).join('\n')}
+
+      RECENT OPPORTUNITIES:
+      ${opportunities.map(o => `- ${o.Name}: ${o.StageName} ($${o.Amount || 'Unknown'})`).join('\n')}
+
+      Provide a health assessment including:
+      1. Overall health score (1-10)
+      2. Key risk factors
+      3. Support patterns and trends
+      4. Business relationship status
+      5. Recommended actions
+
+      Be specific and actionable.
+      `;
+
+      const aiAnalysis = await this.callGeminiAPI(healthPrompt);
+      
+      return {
+        toolName: 'analyze_account_health',
+        success: true,
+        account,
+        caseCount: cases.length,
+        opportunityCount: opportunities.length,
+        aiAnalysis: aiAnalysis.replace(/```.*?\n|\n```/g, '').trim(),
+        analysis: 'deep'
+      };
+      
+    } catch (error) {
+      return { toolName: 'analyze_account_health', success: false, error: error.message };
+    }
+  }
+
+  async analyzePatternTrends(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      let timeCondition = '';
+      switch (params.timeframe) {
+        case 'this_week': timeCondition = 'CreatedDate = THIS_WEEK'; break;
+        case 'this_month': timeCondition = 'CreatedDate = THIS_MONTH'; break;
+        case 'last_30_days': timeCondition = 'CreatedDate = LAST_N_DAYS:30'; break;
+        default: timeCondition = 'CreatedDate = THIS_MONTH';
+      }
+
+      let analysisQuery = '';
+      let analysisPrompt = '';
+      
+      if (params.analysisType === 'case_patterns') {
+        analysisQuery = `
+          SELECT Type, Priority, Status, COUNT(Id) as CaseCount, 
+                 AVG(CASE WHEN ClosedDate != null THEN DATEDIFF(ClosedDate, CreatedDate) END) as AvgDaysToClose
+          FROM Case 
+          WHERE ${timeCondition}
+          GROUP BY Type, Priority, Status
+          ORDER BY CaseCount DESC
+        `;
+        
+        analysisPrompt = `Analyze these case patterns and identify trends, bottlenecks, and recommendations for support improvement:`;
+      } else if (params.analysisType === 'account_risks') {
+        analysisQuery = `
+          SELECT Account.Name, Account.Industry, COUNT(Id) as CaseCount,
+                 SUM(CASE WHEN Priority = 'High' THEN 1 ELSE 0 END) as HighPriorityCases
+          FROM Case 
+          WHERE ${timeCondition}
+          GROUP BY Account.Name, Account.Industry
+          HAVING COUNT(Id) >= 3
+          ORDER BY CaseCount DESC, HighPriorityCases DESC
+        `;
+        
+        analysisPrompt = `Identify accounts at risk based on support case volume and priority. Provide risk assessment and intervention recommendations:`;
+      }
+      
+      const response = await this.salesforceService.executeSOQLQuery(analysisQuery);
+      const data = response.records || [];
+      
+      const fullPrompt = `${analysisPrompt}
+
+DATA:
+${JSON.stringify(data, null, 2)}
+
+Provide insights on:
+1. Key patterns and trends
+2. Risk areas requiring attention
+3. Operational improvements needed
+4. Specific recommendations with priorities
+`;
+
+      const aiAnalysis = await this.callGeminiAPI(fullPrompt);
+      
+      return {
+        toolName: 'analyze_pattern_trends',
+        success: true,
+        analysisType: params.analysisType,
+        timeframe: params.timeframe,
+        dataPoints: data.length,
+        aiAnalysis: aiAnalysis.replace(/```.*?\n|\n```/g, '').trim(),
+        analysis: 'trends'
+      };
+      
+    } catch (error) {
+      return { toolName: 'analyze_pattern_trends', success: false, error: error.message };
+    }
+  }
+
   async conversationalResponse(params) {
     const responses = {
-      help: "I can help you search Salesforce cases, accounts, opportunities, and Jira issues. Try asking about recent cases, specific accounts, or billing issues.",
-      greeting: "Hello! I'm your AI assistant for searching Salesforce and Jira data. What would you like to find?",
-      explanation: "I can search across your connected data sources and provide intelligent analysis of your support tickets, accounts, and deals.",
-      guidance: "Ask me about recent support cases, account health, opportunities, or specific issues you're tracking."
+      help: "I can help you search Salesforce cases, accounts, opportunities, and Jira issues. I can also do deep analysis of specific cases or accounts. Try asking about recent cases, specific accounts, or billing issues.",
+      greeting: "Hello! I'm your AI assistant for searching Salesforce and Jira data. I can also analyze specific cases and accounts in detail. What would you like to find?",
+      explanation: "I can search across your connected data sources and provide intelligent analysis of your support tickets, accounts, and deals. I can drill down into specific records for detailed insights.",
+      guidance: "Ask me about recent support cases, account health, opportunities, or specific issues you're tracking. I can also analyze patterns and trends across your data."
     };
 
     return {

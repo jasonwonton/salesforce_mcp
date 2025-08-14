@@ -240,6 +240,26 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
             });
           }
         } 
+        // Handle deep analysis results
+        else if (result.analysis === 'deep') {
+          if (result.toolName === 'analyze_case_details') {
+            responseText += `📋 **Case:** ${result.caseData.CaseNumber} - ${result.caseData.Subject}\n`;
+            responseText += `🏢 **Account:** ${result.caseData.Account?.Name}\n`;
+            responseText += `📊 **Related Cases:** ${result.relatedCases}\n\n`;
+            responseText += `🤖 **AI Analysis:**\n${result.aiAnalysis}\n`;
+          } else if (result.toolName === 'analyze_account_health') {
+            responseText += `🏢 **Account:** ${result.account.Name} (${result.account.Industry})\n`;
+            responseText += `📊 **Support History:** ${result.caseCount} cases, ${result.opportunityCount} opportunities\n\n`;
+            responseText += `🤖 **Health Analysis:**\n${result.aiAnalysis}\n`;
+          }
+        }
+        // Handle trend analysis
+        else if (result.analysis === 'trends') {
+          responseText += `📈 **Analysis Type:** ${result.analysisType}\n`;
+          responseText += `📅 **Period:** ${result.timeframe}\n`;
+          responseText += `📊 **Data Points:** ${result.dataPoints}\n\n`;
+          responseText += `🤖 **Trend Analysis:**\n${result.aiAnalysis}\n`;
+        }
         // Handle single-object results
         else if (result.data && result.data.length > 0) {
           result.data.slice(0, 5).forEach((item, index) => {
