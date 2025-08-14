@@ -15,6 +15,7 @@ const receiver = new ExpressReceiver({
   clientSecret: process.env.SLACK_CLIENT_SECRET,
   stateSecret: 'my-state-secret',
   scopes: ['commands', 'chat:write', 'users:read'],
+  redirectUri: `${process.env.APP_URL}/slack/oauth_redirect`,
   installationStore: {
     storeInstallation: async (installation) => {
       const teamId = installation.team.id;
