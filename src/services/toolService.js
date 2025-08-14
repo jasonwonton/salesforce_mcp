@@ -35,14 +35,16 @@ class ToolService {
         // SOQL Fallback: SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Contact.Name, Priority, Description FROM Case WHERE Subject LIKE '%billing%'
       },
       {
-        name: 'search_all_objects',
-        description: 'Search across ALL Salesforce objects (Accounts, Contacts, Cases, Opportunities) at once using SOSL',
+        name: 'sosl_discovery_search',
+        description: 'Use SOSL to discover all records containing keywords, then filter by time and analyze deeply',
         parameters: {
-          searchTerm: 'term to search across all objects'
+          keywords: 'array of search terms to find across all objects',
+          timeFilter: 'last_30_days|last_90_days|all_time (optional)',
+          deepAnalysis: 'true|false - whether to do detailed LLM analysis of results'
         },
-        // Example query: Searches individual keywords, for searchTerm="Acme billing":
-        // FIND {Acme} RETURNING Account(Name, Id), Contact(Name, Email, Id), Case(CaseNumber, Subject, Status, Id), Opportunity(Name, StageName, Amount, Id)
-        // FIND {billing} RETURNING Account(Name, Id), Contact(Name, Email, Id), Case(CaseNumber, Subject, Status, Id), Opportunity(Name, StageName, Amount, Id)
+        // Phase 1: FIND {keyword} across all objects
+        // Phase 2: Filter results by time 
+        // Phase 3: Get full details and LLM analysis
       },
       {
         name: 'search_accounts',
@@ -77,11 +79,14 @@ class ToolService {
         }
       },
       {
-        name: 'analyze_case_details',
-        description: 'Get full case details and AI analysis of the situation, root cause, and recommendations',
+        name: 'deep_record_analysis',
+        description: 'Get full record details (Case, Account, etc.) and comprehensive LLM analysis with context',
         parameters: {
-          caseId: 'Case ID or Case Number to analyze deeply'
-        }
+          recordId: 'Salesforce record ID (case, account, opportunity, etc.)',
+          recordType: 'Case|Account|Opportunity|Contact',
+          analysisType: 'summary|root_cause|recommendations|patterns|all'
+        },
+        // Gets full record details + related records + LLM analysis
       },
       {
         name: 'analyze_account_health',
@@ -103,6 +108,14 @@ class ToolService {
         description: 'Provide a helpful conversational response without searching data',
         parameters: {
           responseType: 'greeting|help|explanation|guidance'
+        }
+      },
+      {
+        name: 'thinking_update',
+        description: 'Show user what the AI is currently thinking/analyzing (progress updates)',
+        parameters: {
+          thinkingMessage: 'what the AI is currently doing',
+          progress: 'optional progress indicator like "Step 2 of 4"'
         }
       }
     ];
@@ -131,17 +144,19 @@ Analyze the user request and determine which tool(s) to use. Return JSON:
 
 Examples:
 - "help me" → conversational_response tool
-- "billing issues today" → search_recent_cases tool with timeframe=today, keywords=["billing"]  
-- "find support cases past days" → search_recent_cases tool with timeframe=last_30_days
-- "cases with login problems last 90 days" → search_recent_cases tool with timeframe=last_90_days, keywords=["login"]
-- "recent billing issues" → search_recent_cases tool with timeframe=this_month, keywords=["billing"]
+- "billing issues" → sosl_discovery_search tool with keywords=["billing"], timeFilter="last_30_days", deepAnalysis="true"
+- "find support cases past days" → sosl_discovery_search tool with keywords=["support", "cases"], timeFilter="last_30_days", deepAnalysis="true"  
+- "login problems last 90 days" → sosl_discovery_search tool with keywords=["login"], timeFilter="last_90_days", deepAnalysis="true"
+- "analyze case 12345" → deep_record_analysis tool with recordId="12345", recordType="Case", analysisType="all"
 - "red accounts" → get_account_health tool with riskLevel=high
 - "Microsoft deals" → search_opportunities tool with searchTerm="Microsoft"
 
-IMPORTANT: 
-- For ANY request mentioning time periods (recent, past days, last X days, etc.), use search_recent_cases
-- For specific keywords + time, use search_recent_cases with both timeframe AND keywords
-- Only use search_cases_by_keywords for keyword-only searches without time context
+IMPORTANT - NEW APPROACH: 
+- PREFER sosl_discovery_search for most searches - it uses SOSL to find records, then filters by time and provides deep LLM analysis
+- Use deepAnalysis="true" when user wants insights, patterns, or understanding
+- Use deep_record_analysis when user wants to analyze a specific record by ID or case number
+- Show thinking process to user with detailed analysis
+- Only use old tools for very specific queries that don't benefit from SOSL discovery
 
 Return ONLY JSON, no markdown.
     `;
@@ -233,6 +248,8 @@ Return ONLY JSON, no markdown.
         return await this.searchRecentCases(parameters);
       case 'search_cases_by_keywords':
         return await this.searchCasesByKeywords(parameters);
+      case 'sosl_discovery_search':
+        return await this.soslDiscoverySearch(parameters);
       case 'search_all_objects':
         return await this.searchAllObjects(parameters);
       case 'search_accounts':
@@ -243,12 +260,16 @@ Return ONLY JSON, no markdown.
         return await this.searchOpportunities(parameters);
       case 'search_jira_issues':
         return await this.searchJiraIssues(parameters);
+      case 'deep_record_analysis':
+        return await this.deepRecordAnalysis(parameters);
       case 'analyze_case_details':
         return await this.analyzeCaseDetails(parameters);
       case 'analyze_account_health':
         return await this.analyzeAccountHealth(parameters);
       case 'analyze_pattern_trends':
         return await this.analyzePatternTrends(parameters);
+      case 'thinking_update':
+        return await this.thinkingUpdate(parameters);
       case 'conversational_response':
         return await this.conversationalResponse(parameters);
       default:
@@ -757,6 +778,255 @@ Provide insights on:
     } catch (error) {
       return { toolName: 'analyze_pattern_trends', success: false, error: error.message };
     }
+  }
+
+  // New SOSL Discovery Search - Your brilliant approach!
+  async soslDiscoverySearch(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      console.log('🔍 SOSL Discovery Search starting:', params);
+      
+      const allResults = {
+        accounts: [],
+        contacts: [],
+        cases: [],
+        opportunities: [],
+        searchStrategy: 'SOSL Discovery with Time Filtering and LLM Analysis',
+        thinkingSteps: []
+      };
+
+      // Phase 1: SOSL Discovery
+      allResults.thinkingSteps.push("🔍 Phase 1: Using SOSL to discover all matching records...");
+      
+      for (const keyword of params.keywords.slice(0, 3)) {
+        try {
+          const soslQuery = `FIND {${keyword}} RETURNING Account(Name, Id, Industry, CreatedDate), Contact(Name, Email, Id, CreatedDate), Case(CaseNumber, Subject, Status, Id, CreatedDate, Priority), Opportunity(Name, StageName, Amount, Id, CreatedDate, CloseDate)`;
+          
+          console.log(`🔍 SOSL Discovery for keyword: ${keyword}`);
+          const response = await this.salesforceService.executeSOSLQuery(soslQuery);
+          
+          if (response.searchRecords && response.searchRecords.length > 0) {
+            response.searchRecords.forEach(record => {
+              const recordId = record.Id;
+              
+              switch (record.attributes.type) {
+                case 'Account':
+                  if (!allResults.accounts.find(a => a.Id === recordId)) {
+                    allResults.accounts.push(record);
+                  }
+                  break;
+                case 'Contact':
+                  if (!allResults.contacts.find(c => c.Id === recordId)) {
+                    allResults.contacts.push(record);
+                  }
+                  break;
+                case 'Case':
+                  if (!allResults.cases.find(c => c.Id === recordId)) {
+                    allResults.cases.push(record);
+                  }
+                  break;
+                case 'Opportunity':
+                  if (!allResults.opportunities.find(o => o.Id === recordId)) {
+                    allResults.opportunities.push(record);
+                  }
+                  break;
+              }
+            });
+          }
+        } catch (keywordError) {
+          console.error(`SOSL failed for keyword "${keyword}":`, keywordError.message);
+          continue;
+        }
+      }
+
+      // Phase 2: Time Filtering
+      if (params.timeFilter && params.timeFilter !== 'all_time') {
+        allResults.thinkingSteps.push(`⏰ Phase 2: Filtering results by ${params.timeFilter}...`);
+        
+        const cutoffDate = new Date();
+        if (params.timeFilter === 'last_30_days') {
+          cutoffDate.setDate(cutoffDate.getDate() - 30);
+        } else if (params.timeFilter === 'last_90_days') {
+          cutoffDate.setDate(cutoffDate.getDate() - 90);
+        }
+        
+        // Filter cases by date
+        allResults.cases = allResults.cases.filter(case_ => {
+          if (case_.CreatedDate) {
+            const caseDate = new Date(case_.CreatedDate);
+            return caseDate >= cutoffDate;
+          }
+          return true; // Keep if no date
+        });
+        
+        allResults.thinkingSteps.push(`✅ Filtered to ${allResults.cases.length} cases within timeframe`);
+      }
+
+      // Phase 3: Deep Analysis (if requested)
+      if (params.deepAnalysis === 'true' && allResults.cases.length > 0) {
+        allResults.thinkingSteps.push("🧠 Phase 3: Performing deep LLM analysis of findings...");
+        
+        // Get detailed analysis of top cases
+        const topCases = allResults.cases.slice(0, 5);
+        const analysisPrompt = `
+Analyze these Salesforce cases found through keyword search:
+
+Cases Found:
+${topCases.map(c => `- ${c.CaseNumber}: ${c.Subject} (${c.Status}, Priority: ${c.Priority})`).join('\n')}
+
+Keywords Searched: ${params.keywords.join(', ')}
+
+Please provide:
+1. **Patterns**: What common themes do you see?
+2. **Priority Assessment**: Which cases need immediate attention?
+3. **Root Cause Insights**: What might be causing these issues?
+4. **Recommendations**: What actions should be taken?
+
+Be specific and actionable.
+        `;
+
+        try {
+          const aiAnalysis = await this.callGeminiAPI(analysisPrompt);
+          allResults.deepAnalysis = aiAnalysis.replace(/```.*?\n|\n```/g, '').trim();
+          allResults.thinkingSteps.push("✅ Deep analysis complete");
+        } catch (error) {
+          console.error('Deep analysis failed:', error);
+          allResults.deepAnalysis = "Deep analysis failed - but raw results are available";
+        }
+      }
+
+      const totalFound = allResults.accounts.length + allResults.contacts.length + 
+                        allResults.cases.length + allResults.opportunities.length;
+
+      return {
+        toolName: 'sosl_discovery_search',
+        success: true,
+        data: allResults,
+        count: totalFound,
+        breakdown: {
+          accounts: allResults.accounts.length,
+          contacts: allResults.contacts.length,
+          cases: allResults.cases.length,
+          opportunities: allResults.opportunities.length
+        },
+        deepAnalysisPerformed: params.deepAnalysis === 'true',
+        thinkingProcess: allResults.thinkingSteps
+      };
+
+    } catch (error) {
+      return { toolName: 'sosl_discovery_search', success: false, error: error.message };
+    }
+  }
+
+  // Deep Record Analysis - Get full context of any record
+  async deepRecordAnalysis(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      console.log('🕵️ Deep Record Analysis starting:', params);
+      
+      let query = '';
+
+      // Build query based on record type
+      switch (params.recordType) {
+        case 'Case':
+          query = `
+            SELECT Id, CaseNumber, Subject, Description, Status, Priority, Type, Reason, Origin,
+                   CreatedDate, LastModifiedDate, ClosedDate, IsClosed,
+                   Account.Name, Account.Id, Account.Industry, Account.Type,
+                   Contact.Name, Contact.Email, Contact.Phone,
+                   Owner.Name, Owner.Email
+            FROM Case 
+            WHERE Id = '${params.recordId}' OR CaseNumber = '${params.recordId}'
+          `;
+          break;
+        case 'Account':
+          query = `
+            SELECT Id, Name, Type, Industry, AnnualRevenue, NumberOfEmployees,
+                   BillingCity, BillingState, Phone, Website, Description,
+                   CreatedDate, LastModifiedDate
+            FROM Account 
+            WHERE Id = '${params.recordId}' OR Name LIKE '%${params.recordId}%'
+            LIMIT 1
+          `;
+          break;
+      }
+
+      const response = await this.salesforceService.executeSOQLQuery(query);
+      
+      if (!response.records || response.records.length === 0) {
+        return { toolName: 'deep_record_analysis', success: false, error: `Record ${params.recordId} not found` };
+      }
+
+      const record = response.records[0];
+
+      // Get related records for context
+      let relatedRecords = [];
+      if (params.recordType === 'Case' && record.Account?.Id) {
+        const relatedQuery = `
+          SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate
+          FROM Case 
+          WHERE AccountId = '${record.Account.Id}' 
+          AND Id != '${record.Id}'
+          ORDER BY CreatedDate DESC 
+          LIMIT 10
+        `;
+        const relatedResponse = await this.salesforceService.executeSOQLQuery(relatedQuery);
+        relatedRecords = relatedResponse.records || [];
+      }
+
+      // LLM Analysis
+      let aiAnalysis = '';
+      if (params.analysisType !== 'none') {
+        const analysisPrompt = `
+Analyze this ${params.recordType} record in detail:
+
+RECORD DETAILS:
+${JSON.stringify(record, null, 2)}
+
+RELATED RECORDS: ${relatedRecords.length} found
+
+Analysis Type: ${params.analysisType}
+
+Provide detailed insights, patterns, and recommendations.
+        `;
+
+        try {
+          aiAnalysis = await this.callGeminiAPI(analysisPrompt);
+        } catch (error) {
+          aiAnalysis = 'Analysis failed, but raw data available';
+        }
+      }
+
+      return {
+        toolName: 'deep_record_analysis',
+        success: true,
+        record,
+        relatedRecords: relatedRecords.length,
+        aiAnalysis: aiAnalysis.replace(/```.*?\n|\n```/g, '').trim(),
+        analysisType: params.analysisType,
+        recordType: params.recordType
+      };
+
+    } catch (error) {
+      return { toolName: 'deep_record_analysis', success: false, error: error.message };
+    }
+  }
+
+  // Thinking Updates for user feedback
+  async thinkingUpdate(params) {
+    return {
+      toolName: 'thinking_update',
+      success: true,
+      message: params.thinkingMessage,
+      progress: params.progress || null,
+      isThinking: true
+    };
   }
 
   async conversationalResponse(params) {
