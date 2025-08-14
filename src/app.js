@@ -3,6 +3,7 @@ const express = require('express');
 const { App, ExpressReceiver } = require('@slack/bolt');
 const Team = require('./models/Team');
 const SalesforceService = require('./services/salesforce');
+const MCPService = require('./services/mcpService');
 const oauthRoutes = require('./routes/oauth');
 const db = require('./database');
 
@@ -111,10 +112,29 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
   }
 });
 
-// Station slash command handler
+// Station slash command handler - Multi-source search
 slackApp.command('/station', async ({ command, ack, respond }) => {
   await ack();
-  await respond('hello world');
+  
+  const searchTerm = command.text.trim();
+  if (!searchTerm) {
+    await respond('Usage: `/station [search term]` - searches both Salesforce and Jira');
+    return;
+  }
+
+  try {
+    const mcpService = new MCPService();
+    await mcpService.initializeSalesforce();
+    await mcpService.initializeJira();
+    
+    const results = await mcpService.searchBothSources(searchTerm);
+    const formattedResponse = mcpService.formatCombinedResults(results);
+    
+    await respond(formattedResponse);
+  } catch (error) {
+    console.error('Station command error:', error);
+    await respond(`Search failed: ${error.message}`);
+  }
 });
 
 // Get the Express app from receiver
