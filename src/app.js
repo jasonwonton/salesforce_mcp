@@ -118,10 +118,55 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
   
   const userPrompt = command.text.trim();
   if (!userPrompt) {
-    await respond('Usage: `/station [describe what you\'re looking for]`\nExample: `/station customer billing issues from last week`');
+    await respond('Usage: `/station [describe what you\'re looking for]`\nExample: `/station customer billing issues from last week`\n\nOr ask follow-up questions: `/station ask what are the priority issues?`');
     return;
   }
 
+  // Check if this is an "ask" command for follow-up questions
+  if (userPrompt.toLowerCase().startsWith('ask ')) {
+    const question = userPrompt.substring(4).trim();
+    
+    // Send immediate response to avoid timeout
+    await respond({
+      text: "🤖 AI is analyzing your question...",
+      response_type: "ephemeral"
+    });
+
+    try {
+      const teamId = context.teamId;
+      let team = null;
+      
+      try {
+        team = await Team.findById(teamId);
+      } catch (error) {
+        console.error('Database connection failed, continuing without team data:', error.message);
+      }
+      
+      const multiSourceService = new MultiSourceService(team);
+      
+      // Get recent search context (this is simplified - in production you'd store this in a cache/database)
+      const progressMessages = [];
+      const results = await multiSourceService.searchWithIntelligentPlanning(
+        "recent tickets", // Default search for context
+        async (message) => progressMessages.push(message)
+      );
+      
+      // Generate AI response to the follow-up question
+      const aiResponse = await multiSourceService.answerFollowUpQuestion(question, results);
+      
+      await respond({
+        text: `💬 **AI Answer:** ${aiResponse}`,
+        response_type: "in_channel"
+      });
+      
+    } catch (error) {
+      console.error('Ask command error:', error);
+      await respond(`❌ **AI question failed:** ${error.message}`);
+    }
+    return;
+  }
+
+  // Regular search mode
   // Send immediate response to avoid timeout
   await respond({
     text: "🤖 AI Agent is analyzing your request...",
@@ -155,6 +200,128 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
   } catch (error) {
     console.error('Station command error:', error);
     await respond(`❌ **AI search failed:** ${error.message}`);
+  }
+});
+
+// Handle interactive button clicks for follow-up questions
+slackApp.action('ask_summarize', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  try {
+    const teamId = context.teamId;
+    let team = null;
+    
+    try {
+      team = await Team.findById(teamId);
+    } catch (error) {
+      console.error('Database connection failed, continuing without team data:', error.message);
+    }
+    
+    const multiSourceService = new MultiSourceService(team);
+    
+    // Get recent tickets for context
+    const progressMessages = [];
+    const results = await multiSourceService.searchWithIntelligentPlanning(
+      "recent tickets",
+      async (message) => progressMessages.push(message)
+    );
+    
+    const aiResponse = await multiSourceService.answerFollowUpQuestion(
+      "Please provide a summary of the current issues and their status", 
+      results
+    );
+    
+    await respond({
+      text: `📋 **Issue Summary:**\n${aiResponse}`,
+      response_type: "ephemeral"
+    });
+    
+  } catch (error) {
+    console.error('Summarize button error:', error);
+    await respond({
+      text: "❌ Failed to generate summary. Please try again.",
+      response_type: "ephemeral"
+    });
+  }
+});
+
+slackApp.action('ask_priority', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  try {
+    const teamId = context.teamId;
+    let team = null;
+    
+    try {
+      team = await Team.findById(teamId);
+    } catch (error) {
+      console.error('Database connection failed, continuing without team data:', error.message);
+    }
+    
+    const multiSourceService = new MultiSourceService(team);
+    
+    const progressMessages = [];
+    const results = await multiSourceService.searchWithIntelligentPlanning(
+      "recent tickets",
+      async (message) => progressMessages.push(message)
+    );
+    
+    const aiResponse = await multiSourceService.answerFollowUpQuestion(
+      "What are the highest priority issues that need immediate attention?", 
+      results
+    );
+    
+    await respond({
+      text: `🔥 **Priority Analysis:**\n${aiResponse}`,
+      response_type: "ephemeral"
+    });
+    
+  } catch (error) {
+    console.error('Priority button error:', error);
+    await respond({
+      text: "❌ Failed to analyze priorities. Please try again.",
+      response_type: "ephemeral"
+    });
+  }
+});
+
+slackApp.action('ask_nextsteps', async ({ body, ack, respond, context }) => {
+  await ack();
+  
+  try {
+    const teamId = context.teamId;
+    let team = null;
+    
+    try {
+      team = await Team.findById(teamId);
+    } catch (error) {
+      console.error('Database connection failed, continuing without team data:', error.message);
+    }
+    
+    const multiSourceService = new MultiSourceService(team);
+    
+    const progressMessages = [];
+    const results = await multiSourceService.searchWithIntelligentPlanning(
+      "recent tickets",
+      async (message) => progressMessages.push(message)
+    );
+    
+    const aiResponse = await multiSourceService.answerFollowUpQuestion(
+      "What are the recommended next steps to resolve these issues?", 
+      results
+    );
+    
+    await respond({
+      text: `🎯 **Recommended Next Steps:**\n${aiResponse}`,
+      response_type: "ephemeral"
+    });
+    
+  } catch (error) {
+    console.error('Next steps button error:', error);
+    await respond({
+      text: "❌ Failed to generate next steps. Please try again.",
+      response_type: "ephemeral"
+    });
   }
 });
 

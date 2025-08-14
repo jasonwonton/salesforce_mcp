@@ -190,6 +190,70 @@ class MultiSourceService {
     }
   }
 
+  async answerFollowUpQuestion(question, searchResults) {
+    const ticketData = [];
+    
+    // Collect ticket details
+    searchResults.jira.forEach(issue => {
+      let ticketInfo = `JIRA ${issue.key}: ${issue.fields.summary}\nStatus: ${issue.fields.status.name}`;
+      
+      if (issue.fields.description) {
+        ticketInfo += `\nDescription: ${issue.fields.description}`;
+      }
+      
+      if (issue.fields.comment?.comments) {
+        const comments = issue.fields.comment.comments
+          .slice(-2)
+          .map(comment => `${comment.author?.displayName || 'Unknown'}: ${comment.body}`)
+          .join('\n');
+        ticketInfo += `\nRecent Comments:\n${comments}`;
+      }
+      
+      ticketData.push(ticketInfo);
+    });
+    
+    searchResults.salesforce.forEach(case_ => {
+      ticketData.push(`Salesforce ${case_.CaseNumber}: ${case_.Subject}\nStatus: ${case_.Status}\nDescription: ${case_.Description || 'No description'}`);
+    });
+    
+    const followUpPrompt = `
+    User question: "${question}"
+    
+    Context - Here are the current tickets in the system:
+    ${ticketData.join('\n\n---\n\n')}
+    
+    Please provide a helpful answer to the user's question based on the ticket information above. 
+    Be specific and reference ticket numbers when relevant. Keep the answer concise but informative.
+    `;
+
+    try {
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+          contents: [{
+            parts: [{
+              text: followUpPrompt
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 300
+          }
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      return response.data.candidates[0].content.parts[0].text;
+    } catch (error) {
+      console.error('Follow-up AI response failed:', error.message);
+      return "Sorry, I couldn't process your question right now. Please try again.";
+    }
+  }
+
   async checkConnections() {
     const status = {
       salesforce: { connected: false, reason: '' },
@@ -494,6 +558,54 @@ class MultiSourceService {
           });
         }
       }
+    }
+
+    // Add interactive follow-up section
+    if (totalFound > 0) {
+      blocks.push({
+        type: "divider"
+      });
+      
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "💬 *Want to ask me more about these results?*\nType `/station ask [your question]` to get AI insights!"
+        }
+      });
+      
+      blocks.push({
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "Summarize Issues"
+            },
+            value: `ask_summarize_${Date.now()}`,
+            action_id: "ask_summarize"
+          },
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "Priority Analysis"
+            },
+            value: `ask_priority_${Date.now()}`,
+            action_id: "ask_priority"
+          },
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "Next Steps"
+            },
+            value: `ask_nextsteps_${Date.now()}`,
+            action_id: "ask_nextsteps"
+          }
+        ]
+      });
     }
 
     // Add footer with search stats
