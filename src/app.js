@@ -180,6 +180,12 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     // Try to find team, but continue even if database fails
     try {
       team = await Team.findById(teamId);
+      console.log('Team loaded successfully:', {
+        teamId,
+        hasTeam: !!team,
+        hasSalesforce: !!(team && team.salesforce_access_token),
+        salesforceUrl: team && team.salesforce_instance_url
+      });
     } catch (error) {
       console.error('Database connection failed, continuing without team data:', error.message);
     }
