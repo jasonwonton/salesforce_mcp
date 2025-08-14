@@ -12,7 +12,8 @@ class SalesforceService {
       throw new Error('Salesforce not connected for this team');
     }
 
-    // Use SOSL for full-text search including Description field
+    // First try SOSL for full-text search including Description field
+    console.log('Attempting SOSL search for:', searchTerm);
     const soslQuery = `FIND {${searchTerm}} IN ALL FIELDS RETURNING Case(Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Contact.Name, Priority, Description WHERE Status != 'Closed') LIMIT 20`;
 
     try {
@@ -29,8 +30,21 @@ class SalesforceService {
         }
       );
 
+      console.log('SOSL response:', {
+        status: response.status,
+        searchRecords: response.data.searchRecords?.length || 0,
+        fullResponse: response.data
+      });
+
       // SOSL returns searchRecords array with nested records
       const cases = response.data.searchRecords || [];
+      
+      // If SOSL returns no results, try fallback SOQL query
+      if (cases.length === 0) {
+        console.log('SOSL returned no results, trying SOQL fallback');
+        return await this.searchWithSOQL(searchTerm);
+      }
+      
       return cases;
     } catch (error) {
       console.error('Salesforce SOSL error details:', {
@@ -38,6 +52,52 @@ class SalesforceService {
         data: error.response?.data,
         query: soslQuery,
         url: `${this.instanceUrl}/services/data/v58.0/search`
+      });
+      
+      // If SOSL fails, try SOQL as fallback
+      console.log('SOSL failed, trying SOQL fallback');
+      return await this.searchWithSOQL(searchTerm);
+    }
+  }
+
+  async searchWithSOQL(searchTerm) {
+    console.log('Using SOQL fallback for:', searchTerm);
+    const soqlQuery = `
+      SELECT Id, CaseNumber, Subject, Status, CreatedDate, 
+             Account.Name, Contact.Name, Priority, Description
+      FROM Case 
+      WHERE Subject LIKE '%${searchTerm}%'
+        AND Status != 'Closed'
+      ORDER BY CreatedDate DESC
+      LIMIT 20
+    `;
+
+    try {
+      const response = await axios.get(
+        `${this.instanceUrl}/services/data/v58.0/query`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          params: {
+            q: soqlQuery
+          }
+        }
+      );
+
+      console.log('SOQL response:', {
+        status: response.status,
+        records: response.data.records?.length || 0
+      });
+
+      return response.data.records || [];
+    } catch (error) {
+      console.error('Salesforce SOQL error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        query: soqlQuery,
+        url: `${this.instanceUrl}/services/data/v58.0/query`
       });
       
       if (error.response?.status === 401) {
