@@ -8,8 +8,12 @@ class JiraService {
   }
 
   async searchIssues(searchTerm) {
-    if (!this.baseUrl || !this.username || !this.apiToken) {
-      throw new Error('Jira not configured. Please set JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN');
+    if (!this.baseUrl || !this.username || !this.apiToken || 
+        this.baseUrl === 'https://example.atlassian.net' || 
+        this.username === 'placeholder' || 
+        this.apiToken === 'placeholder') {
+      console.log('Jira not configured, skipping Jira search');
+      return [];
     }
 
     const jql = `text ~ "${searchTerm}" AND status != "Done" ORDER BY created DESC`;
