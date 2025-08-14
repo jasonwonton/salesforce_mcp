@@ -72,7 +72,12 @@ router.get('/salesforce/connect/:teamId', (req, res) => {
     return;
   }
   
-  const salesforceAuthUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=${process.env.SALESFORCE_CLIENT_ID}&redirect_uri=${process.env.APP_URL}/oauth/salesforce/callback&state=${teamId}`;
+  const redirectUri = `${process.env.APP_URL}/oauth/salesforce/callback`;
+  const salesforceAuthUrl = `https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=${process.env.SALESFORCE_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${teamId}`;
+  
+  console.log(`Salesforce Auth URL: ${salesforceAuthUrl}`);
+  console.log(`Redirect URI: ${redirectUri}`);
+  
   res.redirect(salesforceAuthUrl);
 });
 
