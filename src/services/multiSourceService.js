@@ -9,25 +9,31 @@ class MultiSourceService {
     this.team = team;
   }
 
-  async generateSearchTerms(userPrompt) {
+  async analyzeUserIntent(userPrompt) {
     const prompt = `
-    User wants to search for: "${userPrompt}"
+    Analyze this user request: "${userPrompt}"
     
-    Generate 3-5 relevant search keywords that would help find related tickets/issues in Salesforce and Jira.
-    Focus on technical terms, business terms, and common variations.
+    Determine if this requires searching data or is a conversational request.
     
-    Return ONLY a JSON array of strings, like: ["keyword1", "keyword2", "keyword3"]
+    Return JSON with this structure:
+    {
+      "needsSearch": true/false,
+      "response": "conversational response if no search needed",
+      "searchTerms": ["term1", "term2"] if search needed,
+      "searchType": "cases|accounts|opportunities|general" if search needed
+    }
     
     Examples:
-    - "payment issues" → ["payment", "billing", "invoice", "charge", "refund"]
-    - "login problems" → ["login", "authentication", "signin", "password", "auth"]
-    - "slow performance" → ["performance", "slow", "timeout", "speed", "latency"]
+    - "help me" → {"needsSearch": false, "response": "I can help you search Salesforce cases, accounts, or opportunities. What would you like to find?"}
+    - "billing issues today" → {"needsSearch": true, "searchTerms": ["billing", "invoice", "payment"], "searchType": "cases"}
+    - "what are you" → {"needsSearch": false, "response": "I'm your AI assistant that can search Salesforce and Jira data. Try asking about cases, accounts, or recent issues."}
+    - "red accounts" → {"needsSearch": true, "searchTerms": ["health", "risk", "issues"], "searchType": "accounts"}
     `;
 
     // Retry logic for rate limits
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        console.log(`Gemini API attempt ${attempt}/3 for search term generation`);
+        console.log(`Gemini API attempt ${attempt}/3 for intent analysis`);
         
         // Using Google Gemini API
         const response = await axios.post(
@@ -51,9 +57,13 @@ class MultiSourceService {
       );
 
         const generatedText = response.data.candidates[0].content.parts[0].text;
-        const searchTerms = JSON.parse(generatedText);
-        console.log(`Gemini API success: Generated terms:`, searchTerms);
-        return searchTerms;
+        
+        // Clean up markdown wrapping if present
+        const cleanText = generatedText.replace(/```json\n|\n```|```/g, '').trim();
+        const intentAnalysis = JSON.parse(cleanText);
+        
+        console.log(`Gemini API success: Intent analysis:`, intentAnalysis);
+        return intentAnalysis;
         
       } catch (error) {
         console.error(`Gemini API attempt ${attempt} failed:`, error.response?.status, error.message);
@@ -68,30 +78,58 @@ class MultiSourceService {
         
         if (attempt === 3) {
           // Last attempt failed - use fallback
-          console.log('All Gemini API attempts failed, using fallback keyword extraction');
-          return this.extractKeywords(userPrompt);
+          console.log('All Gemini API attempts failed, using fallback intent analysis');
+          return this.fallbackIntentAnalysis(userPrompt);
         }
       }
     }
     
     // Should never reach here, but fallback just in case
-    return this.extractKeywords(userPrompt);
+    return this.fallbackIntentAnalysis(userPrompt);
   }
 
-  extractKeywords(text) {
-    // Simple fallback - extract meaningful words
-    const words = text.toLowerCase()
+  fallbackIntentAnalysis(userPrompt) {
+    const lowerPrompt = userPrompt.toLowerCase();
+    
+    // Conversational patterns
+    const conversationalPatterns = [
+      'help', 'hi', 'hello', 'what', 'who', 'how are you', 'thanks', 'thank you'
+    ];
+    
+    if (conversationalPatterns.some(pattern => lowerPrompt.includes(pattern) && lowerPrompt.length < 20)) {
+      return {
+        needsSearch: false,
+        response: "I can help you search Salesforce cases, accounts, opportunities, or Jira issues. What would you like to find?"
+      };
+    }
+    
+    // Extract meaningful search terms
+    const words = lowerPrompt
       .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
       .filter(word => word.length > 3)
       .filter(word => !['this', 'that', 'with', 'have', 'will', 'from', 'they', 'been', 'would', 'could'].includes(word));
     
-    return words.slice(0, 3); // Take first 3 meaningful words
+    return {
+      needsSearch: true,
+      searchTerms: words.slice(0, 3),
+      searchType: 'general'
+    };
   }
 
   async searchWithIntelligentPlanning(userPrompt, respondCallback) {
-    // Step 1: AI Planning - Generate search terms
-    const searchTerms = await this.generateSearchTerms(userPrompt);
+    // Step 1: AI Planning - Analyze intent and generate search terms  
+    const intentAnalysis = await this.analyzeUserIntent(userPrompt);
+    
+    if (!intentAnalysis.needsSearch) {
+      // This shouldn't happen since we check intent earlier, but handle gracefully
+      return {
+        conversationalResponse: intentAnalysis.response,
+        searchPerformed: false
+      };
+    }
+    
+    const searchTerms = intentAnalysis.searchTerms;
     
     // Step 2: Check connections
     const connectionStatus = await this.checkConnections();

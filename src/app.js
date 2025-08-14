@@ -166,10 +166,9 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     return;
   }
 
-  // Regular search mode
-  // Send immediate response to avoid timeout
+  // Regular search mode - Use AI to decide what to do
   await respond({
-    text: "🤖 AI Agent is analyzing your request...",
+    text: "🤖 AI is analyzing your request...",
     response_type: "ephemeral"
   });
 
@@ -192,8 +191,21 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     
     const multiSourceService = new MultiSourceService(team);
     
-    // Collect all progress messages instead of sending them individually
-    const progressMessages = [];
+    // Step 1: Analyze user intent first (like MCP planning)
+    const intentAnalysis = await multiSourceService.analyzeUserIntent(userPrompt);
+    
+    if (!intentAnalysis.needsSearch) {
+      // Conversational response - no search needed
+      await respond({
+        text: `💬 ${intentAnalysis.response}`,
+        response_type: "in_channel"
+      });
+      return;
+    }
+    
+    // Step 2: User wants data - proceed with search
+    const progressMessages = [`🧠 AI determined: Need to search for ${intentAnalysis.searchType} data`];
+    
     const results = await multiSourceService.searchWithIntelligentPlanning(
       userPrompt, 
       async (message) => progressMessages.push(message)
@@ -201,6 +213,7 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     
     // Ensure teamId is available for UI links
     results.teamId = teamId;
+    results.intentAnalysis = intentAnalysis; // Include AI reasoning
     
     // Send combined final response with all progress and results
     const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt, progressMessages);
@@ -208,7 +221,7 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     
   } catch (error) {
     console.error('Station command error:', error);
-    await respond(`❌ **AI search failed:** ${error.message}`);
+    await respond(`❌ **AI analysis failed:** ${error.message}`);
   }
 });
 
