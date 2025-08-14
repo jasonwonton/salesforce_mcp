@@ -12,37 +12,32 @@ class SalesforceService {
       throw new Error('Salesforce not connected for this team');
     }
 
-    const query = `
-      SELECT Id, CaseNumber, Subject, Status, CreatedDate, 
-             Account.Name, Contact.Name, Priority, Description
-      FROM Case 
-      WHERE Subject LIKE '%${searchTerm}%'
-        AND Status != 'Closed'
-      ORDER BY CreatedDate DESC
-      LIMIT 20
-    `;
+    // Use SOSL for full-text search including Description field
+    const soslQuery = `FIND {${searchTerm}} IN ALL FIELDS RETURNING Case(Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Contact.Name, Priority, Description WHERE Status != 'Closed') LIMIT 20`;
 
     try {
       const response = await axios.get(
-        `${this.instanceUrl}/services/data/v58.0/query`,
+        `${this.instanceUrl}/services/data/v58.0/search`,
         {
           headers: {
             'Authorization': `Bearer ${this.accessToken}`,
             'Content-Type': 'application/json'
           },
           params: {
-            q: query
+            q: soslQuery
           }
         }
       );
 
-      return response.data.records;
+      // SOSL returns searchRecords array with nested records
+      const cases = response.data.searchRecords || [];
+      return cases;
     } catch (error) {
-      console.error('Salesforce API error details:', {
+      console.error('Salesforce SOSL error details:', {
         status: error.response?.status,
         data: error.response?.data,
-        query: query,
-        url: `${this.instanceUrl}/services/data/v58.0/query`
+        query: soslQuery,
+        url: `${this.instanceUrl}/services/data/v58.0/search`
       });
       
       if (error.response?.status === 401) {
