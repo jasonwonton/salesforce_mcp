@@ -87,28 +87,18 @@ router.get('/salesforce/connect/:teamId', (req, res) => {
   
   const redirectUri = `${process.env.APP_URL}/oauth/salesforce/callback`;
   
-  // Generate PKCE parameters
-  const codeVerifier = generateCodeVerifier();
-  const codeChallenge = generateCodeChallenge(codeVerifier);
-  
-  // Store code verifier for later use
-  codeVerifiers.set(teamId, codeVerifier);
-  
-  // Build auth URL with PKCE
+  // Try without PKCE first to isolate the issue
   const authParams = new URLSearchParams({
     response_type: 'code',
     client_id: process.env.SALESFORCE_CLIENT_ID,
     redirect_uri: redirectUri,
-    state: teamId,
-    code_challenge: codeChallenge,
-    code_challenge_method: 'S256'
+    state: teamId
   });
   
   const salesforceAuthUrl = `https://login.salesforce.com/services/oauth2/authorize?${authParams}`;
   
-  console.log(`Salesforce Auth URL: ${salesforceAuthUrl}`);
+  console.log(`Salesforce Auth URL (no PKCE): ${salesforceAuthUrl}`);
   console.log(`Redirect URI: ${redirectUri}`);
-  console.log(`Code Challenge: ${codeChallenge}`);
   
   res.redirect(salesforceAuthUrl);
 });
@@ -129,27 +119,16 @@ router.get('/salesforce/callback', async (req, res) => {
   }
   
   try {
-    // Get the stored code verifier
-    const codeVerifier = codeVerifiers.get(teamId);
-    if (!codeVerifier) {
-      throw new Error('Code verifier not found - session may have expired');
-    }
-    
-    // Clean up the stored code verifier
-    codeVerifiers.delete(teamId);
-    
-    // Exchange code for Salesforce tokens with PKCE
-    // For confidential clients (server-to-server), include client_secret
+    // Exchange code for Salesforce tokens (without PKCE for now)
     const tokenData = {
       grant_type: 'authorization_code',
       client_id: process.env.SALESFORCE_CLIENT_ID,
       client_secret: process.env.SALESFORCE_CLIENT_SECRET,
       redirect_uri: `${process.env.APP_URL}/oauth/salesforce/callback`,
-      code: code,
-      code_verifier: codeVerifier
+      code: code
     };
     
-    console.log('Token exchange data:', { ...tokenData, code_verifier: '[REDACTED]' });
+    console.log('Token exchange data:', tokenData);
     
     const response = await axios.post('https://login.salesforce.com/services/oauth2/token', 
       new URLSearchParams(tokenData),
