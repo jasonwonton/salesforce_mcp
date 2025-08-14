@@ -123,7 +123,10 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
   }
 
   // Send immediate response to avoid timeout
-  await respond('🤖 **AI Agent Starting** - analyzing your request and searching multiple systems...');
+  await respond({
+    text: "🤖 AI Agent is analyzing your request...",
+    response_type: "ephemeral"
+  });
 
   try {
     const teamId = context.teamId;

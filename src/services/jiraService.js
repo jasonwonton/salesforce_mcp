@@ -30,7 +30,7 @@ class JiraService {
           params: {
             jql: jql,
             maxResults: 5,
-            fields: 'key,summary,status,assignee,created,priority'
+            fields: 'key,summary,status,assignee,created,priority,description,comment'
           },
           timeout: 120000 // 2 minute timeout
         }
@@ -54,14 +54,37 @@ class JiraService {
     const blocks = [];
 
     issues.forEach(issue => {
+      let issueText = `🟠 *${issue.key}* - ${issue.fields.summary}\n` +
+                     `Status: ${issue.fields.status.name}\n` +
+                     `Assignee: ${issue.fields.assignee?.displayName || 'Unassigned'}\n` +
+                     `Priority: ${issue.fields.priority?.name || 'None'}`;
+      
+      // Add description if available
+      if (issue.fields.description) {
+        const desc = issue.fields.description.substring(0, 200);
+        issueText += `\n📝 ${desc}${desc.length === 200 ? '...' : ''}`;
+      }
+      
+      // Add recent comments if available
+      if (issue.fields.comment && issue.fields.comment.comments && issue.fields.comment.comments.length > 0) {
+        const recentComments = issue.fields.comment.comments
+          .slice(-2) // Get last 2 comments
+          .map(comment => {
+            const author = comment.author?.displayName || 'Unknown';
+            const body = comment.body.substring(0, 150);
+            return `💬 ${author}: ${body}${body.length === 150 ? '...' : ''}`;
+          });
+        
+        if (recentComments.length > 0) {
+          issueText += `\n${recentComments.join('\n')}`;
+        }
+      }
+
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `🟠 *${issue.key}* - ${issue.fields.summary}\n` +
-                `Status: ${issue.fields.status.name}\n` +
-                `Assignee: ${issue.fields.assignee?.displayName || 'Unassigned'}\n` +
-                `Priority: ${issue.fields.priority?.name || 'None'}`
+          text: issueText
         }
       });
     });

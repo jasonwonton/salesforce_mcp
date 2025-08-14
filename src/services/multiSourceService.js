@@ -68,59 +68,34 @@ class MultiSourceService {
   }
 
   async searchWithIntelligentPlanning(userPrompt, respondCallback) {
-    // Step 1: AI Planning - Be specific about what we plan to do
-    await respondCallback(`🤖 **AI Planning:** Understanding "${userPrompt}"...`);
-    
+    // Step 1: AI Planning - Generate search terms
     const searchTerms = await this.generateSearchTerms(userPrompt);
-    await respondCallback(`🧠 **AI Strategy:** I'll look for tickets containing: ${searchTerms.map(term => `"${term}"`).join(', ')}`);
     
-    // Step 2: Check connections and plan search strategy
-    await respondCallback('🔍 **Checking what systems I can search...**');
-    
+    // Step 2: Check connections
     const connectionStatus = await this.checkConnections();
     
-    // Create detailed search plan
-    let searchPlan = '📋 **My Search Plan:**\n';
     const availableSources = [];
-    
     if (connectionStatus.salesforce.connected) {
-      searchPlan += `✅ Search Salesforce support cases for ${searchTerms.join(', ')}\n`;
       availableSources.push('Salesforce');
-    } else {
-      searchPlan += `❌ Can't search Salesforce: ${connectionStatus.salesforce.reason} (database needed for OAuth tokens)\n`;
     }
-    
     if (connectionStatus.jira.connected) {
-      searchPlan += `✅ Search Jira issues for ${searchTerms.join(', ')}`;
       availableSources.push('Jira');
-    } else {
-      searchPlan += `❌ Can't search Jira: ${connectionStatus.jira.reason}`;
     }
-    
-    await respondCallback(searchPlan);
     
     // Step 3: Handle no connections case
     if (availableSources.length === 0) {
-      await respondCallback('🚫 **Problem:** No systems are connected! You need to connect at least one system to search.');
       return { salesforce: [], jira: [], searchTerms, connectionStatus };
     }
     
-    // Step 4: Execute searches with progress updates
+    // Step 4: Execute searches quietly
     const searchPromises = [];
     
     if (connectionStatus.salesforce.connected) {
-      await respondCallback(`🔍 **Searching Salesforce** for support cases with: ${searchTerms.join(', ')}...`);
       searchPromises.push(this.searchSalesforceWithProgress(searchTerms, respondCallback));
-    } else {
-      await respondCallback(`⏭️ **Skipping Salesforce** (need to connect first)`);
     }
     
     if (connectionStatus.jira.connected) {
-      await respondCallback(`🔍 **Searching Jira** for issues with: ${searchTerms.join(', ')}...`);
-      await respondCallback(`⏳ **Please wait** - Jira searches can take up to 2 minutes to complete...`);
       searchPromises.push(this.searchJiraWithProgress(searchTerms, respondCallback));
-    } else {
-      await respondCallback(`⏭️ **Skipping Jira** (not configured)`);
     }
     
     // Execute searches
@@ -134,7 +109,85 @@ class MultiSourceService {
       teamId: this.team?.id
     };
     
+    // Step 5: AI Analysis of results (silent)
+    if (finalResults.jira.length > 0 || finalResults.salesforce.length > 0) {
+      finalResults.aiSummary = await this.analyzeResults(finalResults, userPrompt);
+    }
+    
     return finalResults;
+  }
+
+  async analyzeResults(results, userPrompt) {
+    const ticketData = [];
+    
+    // Collect Jira ticket details
+    results.jira.forEach(issue => {
+      let ticketInfo = `JIRA ${issue.key}: ${issue.fields.summary}\nStatus: ${issue.fields.status.name}`;
+      
+      if (issue.fields.description) {
+        ticketInfo += `\nDescription: ${issue.fields.description}`;
+      }
+      
+      if (issue.fields.comment?.comments) {
+        const comments = issue.fields.comment.comments
+          .slice(-3) // Last 3 comments
+          .map(comment => `${comment.author?.displayName || 'Unknown'}: ${comment.body}`)
+          .join('\n');
+        ticketInfo += `\nRecent Comments:\n${comments}`;
+      }
+      
+      ticketData.push(ticketInfo);
+    });
+    
+    // Collect Salesforce case details
+    results.salesforce.forEach(case_ => {
+      ticketData.push(`Salesforce ${case_.CaseNumber}: ${case_.Subject}\nStatus: ${case_.Status}\nDescription: ${case_.Description || 'No description'}`);
+    });
+    
+    if (ticketData.length === 0) {
+      return null;
+    }
+    
+    const analysisPrompt = `
+    User searched for: "${userPrompt}"
+    
+    Here are the tickets found:
+    ${ticketData.join('\n\n---\n\n')}
+    
+    Please provide a concise 2-3 sentence summary of what these tickets are about, focusing on:
+    1. Common themes or patterns
+    2. Current status/progress
+    3. Key issues or blockers mentioned
+    
+    Keep it brief and actionable for a business user.
+    `;
+
+    try {
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+          contents: [{
+            parts: [{
+              text: analysisPrompt
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 200
+          }
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      return response.data.candidates[0].content.parts[0].text;
+    } catch (error) {
+      console.error('AI analysis failed:', error.message);
+      return null;
+    }
   }
 
   async checkConnections() {
@@ -175,7 +228,6 @@ class MultiSourceService {
 
   async searchSalesforceWithProgress(searchTerms, respondCallback) {
     if (!this.salesforceService) {
-      await respondCallback(`❌ **Salesforce:** Not available (database connection required)`);
       return [];
     }
     
@@ -184,54 +236,30 @@ class MultiSourceService {
       try {
         const results = await this.salesforceService.searchSupportTickets(searchTerm);
         allResults.push(...results);
-        if (results.length > 0) {
-          await respondCallback(`✅ **Salesforce:** Found ${results.length} cases matching "${searchTerm}"`);
-        }
       } catch (error) {
         console.error(`Salesforce search failed for "${searchTerm}":`, error.message);
         if (error.message.includes('not connected') || error.message.includes('token')) {
-          await respondCallback(`❌ **Salesforce Login Required:** Please connect your Salesforce account to search cases`);
           throw error;
         }
-        await respondCallback(`⚠️ **Salesforce:** Error searching for "${searchTerm}" - ${error.message}`);
       }
     }
-    const deduplicated = this.removeDuplicates(allResults, 'Id');
-    if (deduplicated.length === 0) {
-      await respondCallback(`📭 **Salesforce:** No support cases found with those terms`);
-    }
-    return deduplicated;
+    return this.removeDuplicates(allResults, 'Id');
   }
 
   async searchJiraWithProgress(searchTerms, respondCallback) {
     const allResults = [];
-    for (let i = 0; i < searchTerms.length; i++) {
-      const searchTerm = searchTerms[i];
+    for (const searchTerm of searchTerms) {
       try {
-        await respondCallback(`🔍 **Jira:** Searching for "${searchTerm}" (${i + 1}/${searchTerms.length})...`);
         const results = await this.jiraService.searchIssues(searchTerm);
         allResults.push(...results);
-        if (results.length > 0) {
-          await respondCallback(`✅ **Jira:** Found ${results.length} issues matching "${searchTerm}"`);
-        } else {
-          await respondCallback(`📭 **Jira:** No issues found for "${searchTerm}"`);
-        }
       } catch (error) {
         console.error(`Jira search failed for "${searchTerm}":`, error.message);
         if (error.message.includes('ENOTFOUND') || error.message.includes('authentication')) {
-          await respondCallback(`❌ **Jira Connection Error:** Check your Jira credentials - ${error.message}`);
           throw error;
-        }
-        if (error.message.includes('timeout')) {
-          await respondCallback(`⏱️ **Jira:** Search for "${searchTerm}" timed out after 2 minutes`);
-        } else {
-          await respondCallback(`⚠️ **Jira:** Error searching for "${searchTerm}" - ${error.message}`);
         }
       }
     }
-    const deduplicated = this.removeDuplicates(allResults, 'key');
-    await respondCallback(`🏁 **Jira Search Complete:** Found ${deduplicated.length} unique issues total`);
-    return deduplicated;
+    return this.removeDuplicates(allResults, 'key');
   }
 
   removeDuplicates(array, idField) {
@@ -247,42 +275,47 @@ class MultiSourceService {
   }
 
   formatFinalResults(results, userPrompt, progressMessages = []) {
-    const { salesforce, jira, searchTerms, connectionStatus } = results;
+    const { salesforce, jira, searchTerms, connectionStatus, aiSummary } = results;
     
     const blocks = [
       {
-        type: "section",
+        type: "header",
         text: {
-          type: "mrkdwn",
-          text: `*🤖 AI Search Complete for: "${userPrompt}"*`
+          type: "plain_text",
+          text: `🔍 Search Results: "${userPrompt}"`
         }
       }
     ];
 
-    // Add progress summary
-    if (progressMessages.length > 0) {
+    // Add AI summary if available (most important info first)
+    if (aiSummary) {
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*🧠 AI Process:*\n${progressMessages.slice(0, 5).join('\n')}`
+          text: `*💡 Key Insights:*\n${aiSummary}`
         }
+      });
+      
+      // Add divider for visual separation
+      blocks.push({
+        type: "divider"
       });
     }
 
     let totalFound = 0;
 
-    // Add Salesforce results
+    // Add Salesforce results with better formatting
     if (salesforce && salesforce.length > 0) {
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Salesforce Cases (${salesforce.length}):*`
+          text: `*🏢 Salesforce Cases (${salesforce.length} found)*`
         }
       });
 
-      salesforce.forEach(case_ => {
+      salesforce.forEach((case_, index) => {
         const customerName = case_.Account?.Name || 'Unknown Customer';
         const contactName = case_.Contact?.Name || 'No Contact';
         
@@ -290,47 +323,121 @@ class MultiSourceService {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `🔵 *${case_.CaseNumber}* - ${case_.Subject}\n` +
-                  `Customer: ${customerName} (${contactName})\n` +
-                  `Status: ${case_.Status} | Priority: ${case_.Priority}`
+            text: `*${case_.CaseNumber}* - ${case_.Subject}\n` +
+                  `👤 ${customerName} (${contactName})\n` +
+                  `📊 ${case_.Status} • ${case_.Priority} Priority`
+          },
+          accessory: {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "View"
+            },
+            value: case_.Id
           }
         });
+        
+        // Add spacing between items
+        if (index < salesforce.length - 1) {
+          blocks.push({
+            type: "context",
+            elements: [{
+              type: "plain_text",
+              text: " "
+            }]
+          });
+        }
       });
       
-      totalFound += results.salesforce.length;
+      totalFound += salesforce.length;
+      
+      // Add divider after Salesforce section
+      blocks.push({
+        type: "divider"
+      });
     }
 
-    // Add Jira results
+    // Add Jira results with improved formatting
     if (results.jira && results.jira.length > 0) {
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Jira Issues (${results.jira.length}):*`
+          text: `*🎯 Jira Issues (${results.jira.length} found)*`
         }
       });
 
-      const jiraBlocks = this.jiraService.formatResultsForSlack(results.jira);
-      blocks.push(...jiraBlocks);
+      // Format Jira results with better spacing
+      results.jira.forEach((issue, index) => {
+        let issueText = `*${issue.key}* - ${issue.fields.summary}\n` +
+                       `📊 ${issue.fields.status.name} • ${issue.fields.priority?.name || 'No Priority'}\n` +
+                       `👤 ${issue.fields.assignee?.displayName || 'Unassigned'}`;
+        
+        // Add description if available (truncated)
+        if (issue.fields.description) {
+          const desc = issue.fields.description.substring(0, 150);
+          issueText += `\n📝 ${desc}${desc.length === 150 ? '...' : ''}`;
+        }
+        
+        // Add most recent comment if available
+        if (issue.fields.comment?.comments?.length > 0) {
+          const lastComment = issue.fields.comment.comments.slice(-1)[0];
+          const author = lastComment.author?.displayName || 'Unknown';
+          const body = lastComment.body.substring(0, 100);
+          issueText += `\n💬 ${author}: ${body}${body.length === 100 ? '...' : ''}`;
+        }
+
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: issueText
+          },
+          accessory: {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "Open"
+            },
+            url: `${this.jiraService.baseUrl}/browse/${issue.key}`
+          }
+        });
+        
+        // Add spacing between issues
+        if (index < results.jira.length - 1) {
+          blocks.push({
+            type: "context",
+            elements: [{
+              type: "plain_text",
+              text: " "
+            }]
+          });
+        }
+      });
       
-      totalFound += jira.length;
+      totalFound += results.jira.length;
     }
 
     // Add connection prompts for disconnected systems
-    if (!connectionStatus.salesforce.connected) {
+    if (!connectionStatus.salesforce.connected && totalFound > 0) {
+      blocks.push({
+        type: "divider"
+      });
+      
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `💡 *Want to search Salesforce too?* Click below to authorize your Salesforce account!`
+          text: `💡 *Want to search Salesforce too?*\nConnect your Salesforce org to search support cases alongside Jira issues.`
         },
         accessory: {
           type: "button",
           text: {
             type: "plain_text",
-            text: "🔗 Connect Salesforce"
+            text: "Connect Salesforce"
           },
-          url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId || 'unknown'}`
+          url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId || 'unknown'}`,
+          style: "primary"
         }
       });
     }
@@ -341,10 +448,62 @@ class MultiSourceService {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "No tickets found with those search terms."
+          text: `🔍 No tickets found matching "${userPrompt}"\n\nTry searching with different keywords or check your system connections.`
         }
       });
+      
+      // Show connection options when no results
+      if (!connectionStatus.salesforce.connected || !connectionStatus.jira.connected) {
+        blocks.push({
+          type: "divider"
+        });
+        
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "*🔧 Available Connections:*"
+          }
+        });
+        
+        if (!connectionStatus.salesforce.connected) {
+          blocks.push({
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "🏢 Salesforce - Not connected"
+            },
+            accessory: {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "Connect"
+              },
+              url: `${process.env.APP_URL}/setup/salesforce?team_id=${results.teamId || 'unknown'}`
+            }
+          });
+        }
+        
+        if (!connectionStatus.jira.connected) {
+          blocks.push({
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "🎯 Jira - Not properly configured"
+            }
+          });
+        }
+      }
     }
+
+    // Add footer with search stats
+    blocks.push({
+      type: "context",
+      elements: [{
+        type: "mrkdwn",
+        text: `Found ${totalFound} results • Searched: ${searchTerms.join(', ')}`
+      }]
+    });
 
     return {
       blocks,
