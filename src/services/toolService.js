@@ -18,7 +18,10 @@ class ToolService {
           timeframe: 'today|yesterday|this_week|this_month|last_30_days|last_90_days|last_6_months',
           priority: 'High|Medium|Low (optional)',
           keywords: 'array of search terms to filter results (optional)'
-        }
+        },
+        // Example queries this tool generates:
+        // Basic: SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name FROM Case WHERE CreatedDate = LAST_N_DAYS:30 ORDER BY CreatedDate DESC LIMIT 20
+        // With keywords: SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name FROM Case WHERE CreatedDate = LAST_N_DAYS:90 AND ((Subject LIKE '%billing%' OR Description LIKE '%billing%')) ORDER BY CreatedDate DESC LIMIT 20
       },
       {
         name: 'search_cases_by_keywords',
@@ -26,28 +29,36 @@ class ToolService {
         parameters: {
           keywords: 'array of search terms',
           status: 'Open|Closed (optional)'
-        }
+        },
+        // Example query: Uses salesforceService.searchSupportTickets() which generates:
+        // SOSL: FIND {billing} IN ALL FIELDS RETURNING Case(Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Contact.Name, Priority, Description WHERE Status != 'Closed') LIMIT 20
+        // SOQL Fallback: SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Contact.Name, Priority, Description FROM Case WHERE Subject LIKE '%billing%'
       },
       {
         name: 'search_all_objects',
         description: 'Search across ALL Salesforce objects (Accounts, Contacts, Cases, Opportunities) at once using SOSL',
         parameters: {
           searchTerm: 'term to search across all objects'
-        }
+        },
+        // Example query: Searches individual keywords, for searchTerm="Acme billing":
+        // FIND {Acme} RETURNING Account(Name, Id), Contact(Name, Email, Id), Case(CaseNumber, Subject, Status, Id), Opportunity(Name, StageName, Amount, Id)
+        // FIND {billing} RETURNING Account(Name, Id), Contact(Name, Email, Id), Case(CaseNumber, Subject, Status, Id), Opportunity(Name, StageName, Amount, Id)
       },
       {
         name: 'search_accounts',
         description: 'Search for Salesforce accounts by name or criteria',
         parameters: {
           searchTerm: 'account name or keyword'
-        }
+        },
+        // Example query: SELECT Id, Name, Type, Industry, Phone FROM Account WHERE Name LIKE '%Acme%' LIMIT 10
       },
       {
         name: 'get_account_health',
         description: 'Find accounts with health issues or high case volume',
         parameters: {
           riskLevel: 'high|medium|low'
-        }
+        },
+        // Example query: SELECT Account.Id, Account.Name, COUNT(Id) as CaseCount FROM Case WHERE Priority IN ('High', 'Critical') AND CreatedDate = LAST_30_DAYS GROUP BY Account.Id, Account.Name ORDER BY COUNT(Id) DESC LIMIT 15
       },
       {
         name: 'search_opportunities',
@@ -55,7 +66,8 @@ class ToolService {
         parameters: {
           searchTerm: 'opportunity or account name',
           stage: 'won|lost|open (optional)'
-        }
+        },
+        // Example query: SELECT Id, Name, StageName, Amount, Account.Name FROM Opportunity WHERE (Name LIKE '%Microsoft%' OR Account.Name LIKE '%Microsoft%') LIMIT 10
       },
       {
         name: 'search_jira_issues',
