@@ -24,10 +24,14 @@ class MultiSourceService {
     - "slow performance" → ["performance", "slow", "timeout", "speed", "latency"]
     `;
 
-    try {
-      // Using Google Gemini API
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    // Retry logic for rate limits
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`Gemini API attempt ${attempt}/3 for search term generation`);
+        
+        // Using Google Gemini API
+        const response = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL || 'gemini-1.5-flash'}:generateContent?key=${process.env.GEMINI_API_KEY}`,
         {
           contents: [{
             parts: [{
@@ -46,14 +50,32 @@ class MultiSourceService {
         }
       );
 
-      const generatedText = response.data.candidates[0].content.parts[0].text;
-      const searchTerms = JSON.parse(generatedText);
-      return searchTerms;
-    } catch (error) {
-      console.error('LLM search term generation failed:', error.message);
-      // Fallback to simple keyword extraction
-      return this.extractKeywords(userPrompt);
+        const generatedText = response.data.candidates[0].content.parts[0].text;
+        const searchTerms = JSON.parse(generatedText);
+        console.log(`Gemini API success: Generated terms:`, searchTerms);
+        return searchTerms;
+        
+      } catch (error) {
+        console.error(`Gemini API attempt ${attempt} failed:`, error.response?.status, error.message);
+        
+        if (error.response?.status === 429) {
+          // Rate limit hit - wait before retry
+          const waitTime = attempt * 2000; // 2s, 4s, 6s
+          console.log(`Rate limit hit, waiting ${waitTime}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue; // Try again
+        }
+        
+        if (attempt === 3) {
+          // Last attempt failed - use fallback
+          console.log('All Gemini API attempts failed, using fallback keyword extraction');
+          return this.extractKeywords(userPrompt);
+        }
+      }
     }
+    
+    // Should never reach here, but fallback just in case
+    return this.extractKeywords(userPrompt);
   }
 
   extractKeywords(text) {
