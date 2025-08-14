@@ -4,7 +4,7 @@
   "description": "SaaS Slack bot for Salesforce support ticket queries",
   "main": "src/app.js",
   "scripts": {
-    "start": "npm run migrate && node src/app.js",
+    "start": "node src/simple-test.js",
     "dev": "nodemon src/app.js",
     "migrate": "knex migrate:latest"
   },
