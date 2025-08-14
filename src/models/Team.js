@@ -30,7 +30,19 @@ class Team {
       salesforce_client_secret: encrypt(credentials.client_secret)
     };
 
-    await db('teams').where({ id: teamId }).update(encryptedCredentials);
+    // Try to update first, if no rows affected, create the team
+    const updateResult = await db('teams').where({ id: teamId }).update(encryptedCredentials);
+    
+    if (updateResult === 0) {
+      // Team doesn't exist, create it
+      console.log('Team not found, creating new team record:', teamId);
+      await db('teams').insert({
+        id: teamId,
+        name: 'Slack Team', // Default name
+        ...encryptedCredentials
+      });
+    }
+    
     return this.findById(teamId);
   }
 
