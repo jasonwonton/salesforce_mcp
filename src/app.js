@@ -168,8 +168,10 @@ app.get('/setup/salesforce', (req, res) => {
   `);
 });
 
-// Start the Slack app
-(async () => {
-  await slackApp.start(port);
+// Use Express to handle HTTP, Slack Bolt for events
+app.use('/slack/events', slackApp.receiver.router);
+
+// Start Express server
+app.listen(port, () => {
   console.log(`⚡️ Salesforce Support Ticket Bot is running on port ${port}!`);
-})();
+});
