@@ -34,11 +34,14 @@ class Team {
     const updateResult = await db('teams').where({ id: teamId }).update(encryptedCredentials);
     
     if (updateResult === 0) {
-      // Team doesn't exist, create it
+      // Team doesn't exist, create it with required Slack fields
       console.log('Team not found, creating new team record:', teamId);
       await db('teams').insert({
         id: teamId,
         name: 'Slack Team', // Default name
+        slack_access_token: encrypt('placeholder'), // Required field
+        slack_bot_token: encrypt('placeholder'), // Required field  
+        slack_user_id: 'unknown', // Default value
         ...encryptedCredentials
       });
     }
