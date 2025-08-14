@@ -4,8 +4,9 @@ const axios = require('axios');
 
 class MultiSourceService {
   constructor(team) {
-    this.salesforceService = new SalesforceService(team);
+    this.salesforceService = team ? new SalesforceService(team) : null;
     this.jiraService = new JiraService();
+    this.team = team;
   }
 
   async generateSearchTerms(userPrompt) {
@@ -142,7 +143,7 @@ class MultiSourceService {
     
     // Check Salesforce
     try {
-      if (!this.salesforceService.accessToken) {
+      if (!this.salesforceService || !this.salesforceService.accessToken) {
         status.salesforce.reason = 'Not connected - need to authorize';
       } else {
         status.salesforce.connected = true;
@@ -171,6 +172,11 @@ class MultiSourceService {
   }
 
   async searchSalesforceWithProgress(searchTerms, respondCallback) {
+    if (!this.salesforceService) {
+      await respondCallback(`❌ **Salesforce:** Not available (database connection required)`);
+      return [];
+    }
+    
     const allResults = [];
     for (const searchTerm of searchTerms) {
       try {

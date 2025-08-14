@@ -124,7 +124,15 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
 
   try {
     const teamId = context.teamId;
-    const team = await Team.findById(teamId);
+    let team = null;
+    
+    // Try to find team, but continue even if database fails
+    try {
+      team = await Team.findById(teamId);
+    } catch (error) {
+      console.error('Database connection failed, continuing without team data:', error.message);
+      await respond('⚠️ **Database temporarily unavailable** - searching with limited functionality...');
+    }
     
     const multiSourceService = new MultiSourceService(team);
     
