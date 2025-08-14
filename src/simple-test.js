@@ -6,6 +6,6 @@ app.get('/', (req, res) => {
   res.send('Hello Railway! App is working!');
 });
 
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`Test app running on port ${port}`);
 });
