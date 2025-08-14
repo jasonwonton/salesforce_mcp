@@ -25,7 +25,7 @@ class Team {
     const encryptedCredentials = {
       salesforce_instance_url: credentials.instance_url,
       salesforce_access_token: encrypt(credentials.access_token),
-      salesforce_refresh_token: encrypt(credentials.refresh_token),
+      salesforce_refresh_token: credentials.refresh_token ? encrypt(credentials.refresh_token) : null,
       salesforce_client_id: credentials.client_id,
       salesforce_client_secret: encrypt(credentials.client_secret)
     };
