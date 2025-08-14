@@ -29,9 +29,10 @@ class JiraService {
           },
           params: {
             jql: jql,
-            maxResults: 10,
+            maxResults: 5,
             fields: 'key,summary,status,assignee,created,priority'
-          }
+          },
+          timeout: 10000 // 10 second timeout
         }
       );
 
