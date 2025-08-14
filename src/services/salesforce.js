@@ -16,7 +16,7 @@ class SalesforceService {
       SELECT Id, CaseNumber, Subject, Status, CreatedDate, 
              Account.Name, Contact.Name, Priority, Description
       FROM Case 
-      WHERE (Subject LIKE '%${searchTerm}%' OR Description LIKE '%${searchTerm}%')
+      WHERE Subject LIKE '%${searchTerm}%'
         AND Status != 'Closed'
       ORDER BY CreatedDate DESC
       LIMIT 20
