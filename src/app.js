@@ -4,6 +4,7 @@ const { App, ExpressReceiver } = require('@slack/bolt');
 const Team = require('./models/Team');
 const SalesforceService = require('./services/salesforce');
 const MultiSourceService = require('./services/multiSourceService');
+const ToolService = require('./services/toolService');
 const oauthRoutes = require('./routes/oauth');
 const db = require('./database');
 
@@ -166,9 +167,9 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     return;
   }
 
-  // Regular search mode - Use AI to decide what to do
+  // Tool-based approach like MCP
   await respond({
-    text: "🤖 AI is analyzing your request...",
+    text: "🤖 AI is selecting tools to help you...",
     response_type: "ephemeral"
   });
 
@@ -176,52 +177,62 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     const teamId = context.teamId;
     let team = null;
     
-    // Try to find team, but continue even if database fails
     try {
       team = await Team.findById(teamId);
       console.log('Team loaded successfully:', {
         teamId,
         hasTeam: !!team,
-        hasSalesforce: !!(team && team.salesforce_access_token),
-        salesforceUrl: team && team.salesforce_instance_url
+        hasSalesforce: !!(team && team.salesforce_access_token)
       });
     } catch (error) {
-      console.error('Database connection failed, continuing without team data:', error.message);
+      console.error('Database connection failed:', error.message);
     }
     
-    const multiSourceService = new MultiSourceService(team);
+    const toolService = new ToolService(team);
     
-    // Step 1: Analyze user intent first (like MCP planning)
-    const intentAnalysis = await multiSourceService.analyzeUserIntent(userPrompt);
+    // Step 1: AI selects which tools to use (like MCP)
+    const toolPlan = await toolService.analyzeRequestAndSelectTools(userPrompt);
     
-    if (!intentAnalysis.needsSearch) {
-      // Conversational response - no search needed
-      await respond({
-        text: `💬 ${intentAnalysis.response}`,
-        response_type: "in_channel"
-      });
-      return;
+    // Step 2: Execute the selected tools
+    const toolResults = [];
+    for (const toolCall of toolPlan.selectedTools) {
+      const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
+      toolResults.push(result);
     }
     
-    // Step 2: User wants data - proceed with search
-    const progressMessages = [`🧠 AI determined: Need to search for ${intentAnalysis.searchType} data`];
+    // Step 3: Format response based on tool results
+    let responseText = `🧠 **AI Tool Selection:** ${toolPlan.reasoning}\n\n`;
     
-    const results = await multiSourceService.searchWithIntelligentPlanning(
-      userPrompt, 
-      async (message) => progressMessages.push(message)
-    );
+    for (const result of toolResults) {
+      if (result.toolName === 'conversational_response') {
+        responseText = `💬 ${result.message}`;
+        break; // Skip other results if conversational
+      } else if (result.success) {
+        responseText += `🔍 **${result.toolName}**: Found ${result.count} results\n`;
+        
+        if (result.data && result.data.length > 0) {
+          result.data.slice(0, 5).forEach((item, index) => {
+            if (item.CaseNumber) {
+              responseText += `${index + 1}. ${item.CaseNumber}: ${item.Subject}\n`;
+            } else if (item.Name) {
+              responseText += `${index + 1}. ${item.Name}\n`;
+            }
+          });
+        }
+        responseText += '\n';
+      } else {
+        responseText += `❌ **${result.toolName}**: ${result.error}\n\n`;
+      }
+    }
     
-    // Ensure teamId is available for UI links
-    results.teamId = teamId;
-    results.intentAnalysis = intentAnalysis; // Include AI reasoning
-    
-    // Send combined final response with all progress and results
-    const formattedResponse = multiSourceService.formatFinalResults(results, userPrompt, progressMessages);
-    await respond(formattedResponse);
+    await respond({
+      text: responseText,
+      response_type: "in_channel"
+    });
     
   } catch (error) {
-    console.error('Station command error:', error);
-    await respond(`❌ **AI analysis failed:** ${error.message}`);
+    console.error('Tool-based search error:', error);
+    await respond(`❌ **AI tool selection failed:** ${error.message}`);
   }
 });
 
