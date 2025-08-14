@@ -87,7 +87,7 @@ class MultiSourceService {
       searchPlan += `✅ Search Salesforce support cases for ${searchTerms.join(', ')}\n`;
       availableSources.push('Salesforce');
     } else {
-      searchPlan += `❌ Can't search Salesforce: ${connectionStatus.salesforce.reason}\n`;
+      searchPlan += `❌ Can't search Salesforce: ${connectionStatus.salesforce.reason} (database needed for OAuth tokens)\n`;
     }
     
     if (connectionStatus.jira.connected) {
@@ -117,6 +117,7 @@ class MultiSourceService {
     
     if (connectionStatus.jira.connected) {
       await respondCallback(`🔍 **Searching Jira** for issues with: ${searchTerms.join(', ')}...`);
+      await respondCallback(`⏳ **Please wait** - Jira searches can take up to 2 minutes to complete...`);
       searchPromises.push(this.searchJiraWithProgress(searchTerms, respondCallback));
     } else {
       await respondCallback(`⏭️ **Skipping Jira** (not configured)`);
@@ -203,12 +204,16 @@ class MultiSourceService {
 
   async searchJiraWithProgress(searchTerms, respondCallback) {
     const allResults = [];
-    for (const searchTerm of searchTerms) {
+    for (let i = 0; i < searchTerms.length; i++) {
+      const searchTerm = searchTerms[i];
       try {
+        await respondCallback(`🔍 **Jira:** Searching for "${searchTerm}" (${i + 1}/${searchTerms.length})...`);
         const results = await this.jiraService.searchIssues(searchTerm);
         allResults.push(...results);
         if (results.length > 0) {
           await respondCallback(`✅ **Jira:** Found ${results.length} issues matching "${searchTerm}"`);
+        } else {
+          await respondCallback(`📭 **Jira:** No issues found for "${searchTerm}"`);
         }
       } catch (error) {
         console.error(`Jira search failed for "${searchTerm}":`, error.message);
@@ -216,13 +221,15 @@ class MultiSourceService {
           await respondCallback(`❌ **Jira Connection Error:** Check your Jira credentials - ${error.message}`);
           throw error;
         }
-        await respondCallback(`⚠️ **Jira:** Error searching for "${searchTerm}" - ${error.message}`);
+        if (error.message.includes('timeout')) {
+          await respondCallback(`⏱️ **Jira:** Search for "${searchTerm}" timed out after 2 minutes`);
+        } else {
+          await respondCallback(`⚠️ **Jira:** Error searching for "${searchTerm}" - ${error.message}`);
+        }
       }
     }
     const deduplicated = this.removeDuplicates(allResults, 'key');
-    if (deduplicated.length === 0) {
-      await respondCallback(`📭 **Jira:** No issues found with those terms`);
-    }
+    await respondCallback(`🏁 **Jira Search Complete:** Found ${deduplicated.length} unique issues total`);
     return deduplicated;
   }
 
