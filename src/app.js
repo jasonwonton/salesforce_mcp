@@ -558,7 +558,93 @@ function formatToolResults(toolResults) {
         });
         responseText += '\n';
       }
-      // Handle single-object results
+      // Handle new search_records tool results
+      else if (result.toolName === 'search_records' && result.data && result.data.length > 0) {
+        responseText += `🔍 **${result.searchStrategy}**\n\n`;
+        
+        result.data.slice(0, 5).forEach((record, index) => {
+          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${record.Id}`;
+          
+          if (record.CaseNumber) {
+            // Case records
+            responseText += `${index + 1}. <${sfUrl}|${record.CaseNumber}>: ${record.Subject} (${record.Status})\n`;
+            if (record.Priority) responseText += `   🔥 Priority: ${record.Priority}\n`;
+            if (record.Account && record.Account.Name) responseText += `   🏢 Account: ${record.Account.Name}\n`;
+          } else if (record.Amount !== undefined) {
+            // Opportunity records
+            const amount = record.Amount ? `$${Number(record.Amount).toLocaleString()}` : 'No amount';
+            responseText += `${index + 1}. <${sfUrl}|${record.Name}> - ${amount} (${record.StageName})\n`;
+            if (record.Account && record.Account.Name) responseText += `   🏢 Account: ${record.Account.Name}\n`;
+            if (record.CloseDate) responseText += `   📅 Close Date: ${new Date(record.CloseDate).toLocaleDateString()}\n`;
+          } else if (record.Industry !== undefined) {
+            // Account records
+            responseText += `${index + 1}. <${sfUrl}|${record.Name}> (${record.Industry || 'Unknown Industry'})\n`;
+            if (record.Phone) responseText += `   📞 Phone: ${record.Phone}\n`;
+          } else if (record.Email !== undefined) {
+            // Contact records
+            responseText += `${index + 1}. <${sfUrl}|${record.Name}> (${record.Title || 'No Title'})\n`;
+            responseText += `   📧 Email: ${record.Email}\n`;
+            if (record.Account && record.Account.Name) responseText += `   🏢 Account: ${record.Account.Name}\n`;
+          }
+        });
+        
+        if (result.deepAnalysis) {
+          responseText += `\n🧠 **AI Analysis:**\n${result.deepAnalysis}\n`;
+        }
+        responseText += '\n';
+      }
+      // Handle analyze_record tool results
+      else if (result.toolName === 'analyze_record' && result.record) {
+        const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${result.record.Id}`;
+        responseText += `🔍 **Record Analysis:**\n`;
+        responseText += `📋 <${sfUrl}|${result.record.CaseNumber || result.record.Name}>\n`;
+        if (result.analysis) {
+          responseText += `\n🧠 **AI Analysis:**\n${result.analysis}\n`;
+        }
+        responseText += '\n';
+      }
+      // Handle cross_object_search tool results  
+      else if (result.toolName === 'cross_object_search' && result.data) {
+        if (result.breakdown) {
+          responseText += `📊 **Cross-Object Results:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
+        }
+        
+        // Show cases
+        if (result.data.cases && result.data.cases.length > 0) {
+          responseText += `📋 **Cases:**\n`;
+          result.data.cases.slice(0, 3).forEach((case_, index) => {
+            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${case_.Id}`;
+            responseText += `${index + 1}. <${sfUrl}|${case_.CaseNumber}>: ${case_.Subject} (${case_.Status})\n`;
+          });
+          responseText += '\n';
+        }
+        
+        // Show opportunities
+        if (result.data.opportunities && result.data.opportunities.length > 0) {
+          responseText += `💰 **Opportunities:**\n`;
+          result.data.opportunities.slice(0, 3).forEach((opp, index) => {
+            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${opp.Id}`;
+            const amount = opp.Amount ? `$${Number(opp.Amount).toLocaleString()}` : 'No amount';
+            responseText += `${index + 1}. <${sfUrl}|${opp.Name}> - ${amount} (${opp.StageName})\n`;
+          });
+          responseText += '\n';
+        }
+        
+        // Show accounts
+        if (result.data.accounts && result.data.accounts.length > 0) {
+          responseText += `🏢 **Accounts:**\n`;
+          result.data.accounts.slice(0, 3).forEach((account, index) => {
+            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${account.Id}`;
+            responseText += `${index + 1}. <${sfUrl}|${account.Name}> (${account.Industry || 'Unknown'})\n`;
+          });
+          responseText += '\n';
+        }
+        
+        if (result.deepAnalysis) {
+          responseText += `🧠 **Cross-Object Analysis:**\n${result.deepAnalysis}\n\n`;
+        }
+      }
+      // Handle single-object results (fallback)
       else if (result.data && result.data.length > 0) {
         result.data.slice(0, 5).forEach((item, index) => {
           if (item.CaseNumber) {
