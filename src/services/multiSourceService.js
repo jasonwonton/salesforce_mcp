@@ -358,7 +358,10 @@ class MultiSourceService {
     const allResults = [];
     for (const searchTerm of searchTerms) {
       try {
-        const results = await this.salesforceService.searchSupportTickets(searchTerm);
+        // Use basic SOSL search for simple case lookup
+        const soslQuery = `FIND {${searchTerm}} RETURNING Case(Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Contact.Name, Priority, Description WHERE Status != 'Closed') LIMIT 20`;
+        const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+        const results = soslResult.searchRecords || [];
         allResults.push(...results);
       } catch (error) {
         console.error(`Salesforce search failed for "${searchTerm}":`, error.message);

@@ -312,14 +312,42 @@ class QueryTestSuite {
 // Export for use
 module.exports = QueryTestSuite;
 
+// Simple test runner for individual queries
+async function testSingleQuery(query) {
+  console.log(`\n🔍 Testing: "${query}"\n`);
+  
+  try {
+    // You'll need to replace with your actual team object
+    const Team = require('./src/models/Team');
+    const team = await Team.findById('your-team-id'); // Replace with real team ID
+    const toolService = new ToolService(team);
+    
+    // Get the AI plan
+    const plan = await toolService.analyzeRequestAndSelectTools(query);
+    console.log('🧠 AI Plan:', JSON.stringify(plan, null, 2));
+    
+    // Execute the search
+    const result = await toolService.executeTool('search_salesforce', { query });
+    console.log('📊 Search Results:', JSON.stringify(result, null, 2));
+    
+  } catch (error) {
+    console.error('❌ Test failed:', error);
+  }
+}
+
 // Run tests if called directly
 if (require.main === module) {
-  const testSuite = new QueryTestSuite();
+  const args = process.argv.slice(2);
   
-  // Generate documentation
-  testSuite.generateQueryDocumentation();
-  
-  // If you want to test with a real ToolService:
-  // const toolService = new ToolService(null); // You'd need a real team object
-  // testSuite.testAIToolSelection(toolService);
+  if (args.length > 0) {
+    // Test a single query: node test-queries.js "recent support cases"
+    testSingleQuery(args.join(' '));
+  } else {
+    const testSuite = new QueryTestSuite();
+    testSuite.generateQueryDocumentation();
+    
+    console.log('\n💡 To test a single query, run:');
+    console.log('node test-queries.js "recent support cases"');
+    console.log('node test-queries.js "United Oil Gas issues"');
+  }
 }

@@ -159,7 +159,7 @@ Return ONLY JSON, no markdown.
     }
   }
 
-  // Implement search_salesforce using combined SOQL + SOSL approach
+  // Simplified search: SOSL first (if keywords), then SOQL filtering
   async searchSalesforce(params) {
     if (!this.salesforceService) {
       throw new Error('Salesforce not connected');
@@ -176,44 +176,24 @@ Return ONLY JSON, no markdown.
         console.log('✅ Parsed parameters:', JSON.stringify(parsedParams, null, 2));
       }
       
-      // Determine search strategy based on parameters
-      const hasKeywords = parsedParams.keywords && parsedParams.keywords.length > 0;
-      const hasStructuredFilters = parsedParams.timeRange || parsedParams.opportunityStage || parsedParams.minAmount || 
-                                  parsedParams.maxAmount || parsedParams.caseStatus || parsedParams.casePriority || 
-                                  parsedParams.accountType || parsedParams.accountHealth || parsedParams.contactRole;
-      
-      // Check if keywords are actually searchable or just filter values
-      const hasSearchableKeywords = this.hasSearchableKeywords(parsedParams);
-      
-      console.log('📊 Strategy Analysis:');
-      console.log('  - Has Keywords:', hasKeywords);
-      console.log('  - Has Structured Filters:', hasStructuredFilters);
-      console.log('  - Has Searchable Keywords:', hasSearchableKeywords);
-      console.log('  - Keywords:', parsedParams.keywords);
-      console.log('  - Time Range:', parsedParams.timeRange);
-      console.log('  - Object Types:', parsedParams.objectTypes);
+      // Use LLM to determine if we have meaningful keywords
+      const hasSearchableKeywords = await this.hasSearchableKeywordsLLM(parsedParams, params.query || '');
+      console.log('🧠 LLM keyword analysis:', hasSearchableKeywords);
       
       let searchResults = {};
+      let strategy = '';
       
-      // Strategy 1: Combined SOSL + SOQL (searchable keywords + structured filters)
-      if (hasSearchableKeywords && hasStructuredFilters) {
-        console.log('📊 Using combined SOSL + SOQL strategy');
-        searchResults = await this.searchWithSOSLAndSOQL(parsedParams);
-      }
-      // Strategy 2: Pure SOQL (structured filters only, or non-searchable keywords)
-      else if (hasStructuredFilters || (hasKeywords && !hasSearchableKeywords)) {
-        console.log('📊 Using pure SOQL strategy (structured filters or non-searchable keywords)');
+      if (hasSearchableKeywords.hasKeywords) {
+        // Strategy 1: SOSL discovery → SOQL filtering
+        console.log('🔍 Using SOSL → SOQL strategy');
+        console.log('📝 Short keywords for SOSL:', hasSearchableKeywords.shortKeywords);
+        strategy = 'SOSL Discovery + SOQL Filtering';
+        searchResults = await this.searchSOSLThenSOQL(parsedParams, hasSearchableKeywords.shortKeywords);
+      } else {
+        // Strategy 2: Direct SOQL with all filters
+        console.log('📊 Using direct SOQL strategy (no searchable keywords)');
+        strategy = 'Direct SOQL with Filters';
         searchResults = await this.searchWithSOQLOnly(parsedParams);
-      }
-      // Strategy 3: Pure SOSL (searchable keywords only, cross-object)
-      else if (hasSearchableKeywords && !hasStructuredFilters) {
-        console.log('📊 Using pure SOSL strategy');
-        searchResults = await this.searchWithSOSLOnly(parsedParams);
-      }
-      // Strategy 4: Default fallback
-      else {
-        console.log('📊 Using default search strategy');
-        searchResults = await this.searchWithDefaultStrategy(parsedParams);
       }
 
       // Deep analysis if requested
@@ -227,7 +207,7 @@ Return ONLY JSON, no markdown.
         toolName: 'search_salesforce',
         data: searchResults,
         deepAnalysis: analysis,
-        searchStrategy: this.getSearchStrategy(params),
+        searchStrategy: strategy,
         parameters: params
       };
 
@@ -239,6 +219,95 @@ Return ONLY JSON, no markdown.
         error: error.message
       };
     }
+  }
+
+  // Use LLM to determine if query has searchable keywords and extract short ones
+  async hasSearchableKeywordsLLM(params, originalQuery) {
+    const prompt = `
+Analyze this search query for meaningful searchable keywords:
+
+Original Query: "${originalQuery}"
+Parsed Keywords: ${JSON.stringify(params.keywords || [], null, 2)}
+
+Determine:
+1. Are there any actual searchable keywords (company names, product names, people names, specific terms)?
+2. Extract the SHORTEST, most essential keywords for SOSL search (max 2-3 words total)
+
+Ignore filter words like: open, closed, won, lost, high, medium, low, recent, last, days, etc.
+
+Examples:
+- "recent support cases" → No searchable keywords
+- "United Oil Gas issues" → Yes, keywords: ["United Oil"]  
+- "Acme Corp billing problems last month" → Yes, keywords: ["Acme Corp"]
+- "high priority cases from Singapore office" → Yes, keywords: ["Singapore"]
+
+Return JSON:
+{
+  "hasKeywords": boolean,
+  "shortKeywords": ["word1", "word2"], 
+  "reasoning": "why these are/aren't searchable"
+}
+    `;
+
+    try {
+      const response = await this.callGeminiAPI(prompt);
+      const cleanResponse = response.replace(/```json\n|\n```|```/g, '').trim();
+      return JSON.parse(cleanResponse);
+    } catch (error) {
+      console.error('LLM keyword analysis failed:', error);
+      // Fallback to simple heuristic
+      const hasKeywords = params.keywords && params.keywords.length > 0 && 
+                         !params.keywords.every(k => ['open', 'closed', 'won', 'lost', 'high', 'medium', 'low'].includes(k.toLowerCase()));
+      return {
+        hasKeywords,
+        shortKeywords: hasKeywords ? params.keywords.slice(0, 2) : [],
+        reasoning: 'Fallback heuristic due to LLM failure'
+      };
+    }
+  }
+
+  // New unified SOSL → SOQL approach  
+  async searchSOSLThenSOQL(params, shortKeywords) {
+    const results = { accounts: [], contacts: [], cases: [], opportunities: [] };
+    const objectTypes = this.getObjectTypesToSearch(params.objectTypes);
+    
+    console.log(`🚀 Step 1: SOSL Discovery with keywords: [${shortKeywords.join(', ')}]`);
+    
+    for (const objectType of objectTypes) {
+      try {
+        // Step 1: SOSL to find records with keywords
+        const keywordString = this.sanitizeKeywords(shortKeywords).join(' ');
+        const soslQuery = `FIND {${keywordString}} RETURNING ${objectType}(Id)`;
+        
+        console.log(`  🔍 SOSL for ${objectType}: ${soslQuery}`);
+        const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+        
+        const foundIds = soslResult.searchRecords ? soslResult.searchRecords.map(r => r.Id) : [];
+        console.log(`  📊 SOSL found ${foundIds.length} ${objectType} records`);
+        
+        if (foundIds.length > 0) {
+          // Step 2: SOQL to filter and enrich with full data
+          console.log(`  🔍 Step 2: SOQL filtering for ${objectType}...`);
+          const filteredRecords = await this.filterRecordsWithSOQL(objectType, foundIds, params);
+          results[`${objectType.toLowerCase()}s`] = filteredRecords;
+          console.log(`  ✅ Final ${objectType} results: ${filteredRecords.length} records`);
+        }
+        
+      } catch (error) {
+        console.error(`❌ Error in SOSL→SOQL for ${objectType}:`, error.message);
+        // If SOSL fails, try direct SOQL for this object type
+        try {
+          console.log(`  🔄 SOSL failed, trying direct SOQL for ${objectType}...`);
+          const soqlQuery = this.buildSOQLQuery(objectType, params);
+          const response = await this.salesforceService.executeSOQLQuery(soqlQuery);
+          results[`${objectType.toLowerCase()}s`] = response.records || [];
+        } catch (soqlError) {
+          console.error(`❌ Direct SOQL also failed for ${objectType}:`, soqlError.message);
+        }
+      }
+    }
+    
+    return results;
   }
 
   // Strategy 1: SOSL for discovery + SOQL for filtering
@@ -257,8 +326,8 @@ Return ONLY JSON, no markdown.
           // Step 2: SOQL filtering with structured criteria
           const filteredRecords = await this.filterRecordsWithSOQL(objectType, soslIds, params);
           results[`${objectType.toLowerCase()}s`] = filteredRecords;
-        }
-      } catch (error) {
+      }
+    } catch (error) {
         console.error(`Error searching ${objectType}:`, error.message);
       }
     }
@@ -314,7 +383,7 @@ Return ONLY JSON, no markdown.
       const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
       
       if (soslResult.searchRecords) {
-        return {
+      return {
           accounts: soslResult.searchRecords.filter(r => r.attributes.type === 'Account'),
           contacts: soslResult.searchRecords.filter(r => r.attributes.type === 'Contact'),
           cases: soslResult.searchRecords.filter(r => r.attributes.type === 'Case'),
@@ -469,19 +538,19 @@ Return ONLY JSON, no markdown.
       switch (params.opportunityStage) {
         case 'open':
           filters.push('IsClosed = false');
-          break;
+                  break;
         case 'closed':
           filters.push('IsClosed = true');
-          break;
+                  break;
         case 'won':
           filters.push('IsWon = true');
-          break;
+                  break;
         case 'lost':
           filters.push('IsWon = false AND IsClosed = true');
           break;
         case 'in_flight':
           filters.push('IsClosed = false AND StageName NOT IN (\'Closed Won\', \'Closed Lost\')');
-          break;
+                  break;
       }
     }
     
@@ -643,7 +712,7 @@ Return ONLY JSON, no markdown.
       params.timeRange = 'today';
     } else if (lowerQuery.includes('yesterday')) {
       params.timeRange = 'yesterday';
-    } else {
+      } else {
       params.timeRange = 'last_30_days'; // Default
     }
     
@@ -707,7 +776,7 @@ ${Object.entries(results).slice(0, 3).map(([type, records]) =>
 
 Provide insights about patterns, priorities, and recommendations based on the search criteria.
       `;
-      
+
       return await this.callGeminiAPI(analysisPrompt);
     } catch (error) {
       return 'Analysis failed but raw results are available';
