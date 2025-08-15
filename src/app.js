@@ -48,7 +48,7 @@ const slackApp = new App({
 global.pendingPlans = global.pendingPlans || {};
 
 // Station slash command handler - AI-powered multi-source search with Claude Code-like planning
-slackApp.command('/station', async ({ command, ack, respond, context, say }) => {
+slackApp.command('/station', async ({ command, ack, respond, context, client }) => {
   await ack();
   
   const userPrompt = command.text.trim();
@@ -73,7 +73,8 @@ slackApp.command('/station', async ({ command, ack, respond, context, say }) => 
     }
 
     // Execute the approved plan
-    await say({
+    await client.chat.postMessage({
+      channel: command.channel_id,
       text: "✅ **Plan approved!** Executing tools...",
       thread_ts: command.ts
     });
@@ -88,7 +89,8 @@ slackApp.command('/station', async ({ command, ack, respond, context, say }) => 
         const toolCall = pendingPlan.toolPlan.selectedTools[i];
         
         // Show current tool execution
-        await say({
+        await client.chat.postMessage({
+          channel: command.channel_id,
           text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
           thread_ts: command.ts
         });
@@ -98,7 +100,8 @@ slackApp.command('/station', async ({ command, ack, respond, context, say }) => 
         
         // Show completion
         const status = result.success ? "✅" : "❌";
-        await say({
+        await client.chat.postMessage({
+          channel: command.channel_id,
           text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
           thread_ts: command.ts
         });
@@ -111,7 +114,8 @@ slackApp.command('/station', async ({ command, ack, respond, context, say }) => 
       // Add conversation continuation
       finalResponse += "\n💬 **Continue the conversation:** Type `/station ask [question]` to analyze these results further.";
       
-      await say({
+      await client.chat.postMessage({
+        channel: command.channel_id,
         text: finalResponse,
         thread_ts: command.ts
       });
@@ -121,7 +125,8 @@ slackApp.command('/station', async ({ command, ack, respond, context, say }) => 
       
     } catch (error) {
       console.error('Plan execution error:', error);
-      await say({
+      await client.chat.postMessage({
+        channel: command.channel_id,
         text: `❌ **Plan execution failed:** ${error.message}`,
         thread_ts: command.ts
       });
@@ -248,9 +253,10 @@ slackApp.command('/station', async ({ command, ack, respond, context, say }) => 
     console.log('Sending plan with buttons for planKey:', planKey);
     
     try {
-      await respond({
+      await client.chat.postMessage({
+        channel: command.channel_id,
         text: planText,
-        response_type: "in_channel",
+        thread_ts: command.ts,
         blocks: [
           {
             type: "section",
@@ -298,9 +304,10 @@ slackApp.command('/station', async ({ command, ack, respond, context, say }) => 
     } catch (blockError) {
       console.error('Failed to send blocks, falling back to text:', blockError);
       // Fallback without blocks if interactive components not configured
-      await respond({
+      await client.chat.postMessage({
+        channel: command.channel_id,
         text: planText + `\n\n**Interactive buttons not available.** Type \`/station approve\` to execute this plan.`,
-        response_type: "in_channel"
+        thread_ts: command.ts
       });
     }
     
@@ -415,7 +422,7 @@ function formatToolResults(toolResults) {
   return responseText;
 }
 // Handle plan approval button
-slackApp.action('approve_plan', async ({ body, ack, respond, context, say }) => {
+slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) => {
   await ack();
   
   const planKey = body.actions[0].value;
@@ -430,7 +437,8 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, say }) => 
   }
 
   // Execute the approved plan
-  await say({
+  await client.chat.postMessage({
+    channel: body.channel.id,
     text: "✅ **Plan approved!** Executing tools...",
     thread_ts: body.message.ts
   });
@@ -445,7 +453,8 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, say }) => 
       const toolCall = pendingPlan.toolPlan.selectedTools[i];
       
       // Show current tool execution
-      await say({
+      await client.chat.postMessage({
+        channel: body.channel.id,
         text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
         thread_ts: body.message.ts
       });
@@ -455,7 +464,8 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, say }) => 
       
       // Show completion
       const status = result.success ? "✅" : "❌";
-      await say({
+      await client.chat.postMessage({
+        channel: body.channel.id,
         text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
         thread_ts: body.message.ts
       });
