@@ -378,19 +378,9 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
 // Helper function to get tool descriptions
 function getToolDescription(toolName) {
   const descriptions = {
-    'search_recent_cases': 'Search recent Salesforce cases',
-    'search_cases_by_keywords': 'Search cases by specific keywords',
-    'sosl_discovery_search': 'SOSL discovery with time filtering and deep AI analysis',
-    'deep_record_analysis': 'Deep analysis of specific records with full context',
-    'search_all_objects': 'Search across all Salesforce objects',
-    'search_accounts': 'Search for Salesforce accounts',
-    'get_account_health': 'Find accounts with health issues',
-    'search_opportunities': 'Search deals/opportunities',
-    'search_jira_issues': 'Search Jira tickets and issues',
-    'analyze_case_details': 'Deep analysis of specific case',
-    'analyze_account_health': 'Deep dive into account health',
-    'analyze_pattern_trends': 'AI analysis of patterns and trends',
-    'thinking_update': 'Show AI thinking process',
+    'search_records': 'Search Salesforce objects with keywords and filters',
+    'analyze_record': 'Deep analysis of specific records with AI insights',
+    'cross_object_search': 'Search across multiple Salesforce objects',
     'conversational_response': 'Provide helpful guidance'
   };
   return descriptions[toolName] || 'Execute tool';

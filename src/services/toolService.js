@@ -156,23 +156,28 @@ Return ONLY JSON, no markdown.
       };
     }
     
-    if (lower.includes('today') || lower.includes('recent')) {
+    if (lower.includes('analyze') && (lower.includes('case') || lower.includes('account') || lower.includes('opportunity'))) {
       return {
-        reasoning: 'Recent data request detected',
+        reasoning: 'Record analysis request detected',
         selectedTools: [{ 
-          toolName: 'search_recent_cases', 
-          parameters: { timeframe: 'today' } 
+          toolName: 'analyze_record', 
+          parameters: { recordType: 'Case', analysisType: 'summary' } 
         }]
       };
     }
     
-    // Default to keyword search
-    const keywords = userRequest.split(' ').filter(word => word.length > 3);
+    // Default to case search with keywords
+    const keywords = userRequest.split(' ').filter(word => word.length > 2);
     return {
-      reasoning: 'General search request',
+      reasoning: 'General search request - defaulting to case search',
       selectedTools: [{ 
-        toolName: 'search_cases_by_keywords', 
-        parameters: { keywords } 
+        toolName: 'search_records',
+        parameters: { 
+          object: 'Case', 
+          keywords: keywords.slice(0, 3),
+          timeframe: 'last_30_days',
+          deepAnalysis: 'true'
+        } 
       }]
     };
   }
