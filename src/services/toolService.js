@@ -101,12 +101,69 @@ Return ONLY JSON, no markdown.
     `;
 
     try {
-      const response = await this.callGeminiAPI(prompt);
+      // Try Anthropic first
+      const response = await this.callLLM(prompt);
       const cleanResponse = response.replace(/```json\n|\n```|```/g, '').trim();
       return JSON.parse(cleanResponse);
     } catch (error) {
       console.error('Tool selection failed:', error);
       throw error;
+    }
+  }
+
+  async callLLM(prompt) {
+    // Try Anthropic first
+    try {
+      console.log('🧠 Attempting Anthropic API...');
+      return await this.callAnthropicAPI(prompt);
+    } catch (anthropicError) {
+      console.warn('⚠️ Anthropic API failed, falling back to Gemini:', anthropicError.message);
+      try {
+        return await this.callGeminiAPI(prompt);
+      } catch (geminiError) {
+        console.error('❌ Both Anthropic and Gemini APIs failed');
+        throw new Error(`All LLM APIs failed - Anthropic: ${anthropicError.message}, Gemini: ${geminiError.message}`);
+      }
+    }
+  }
+
+  async callAnthropicAPI(prompt) {
+    const axios = require('axios');
+    
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await axios.post(
+          'https://api.anthropic.com/v1/messages',
+          {
+            model: 'claude-3-haiku-20240307',
+            max_tokens: 2048,
+            temperature: 0.1,
+            messages: [
+              {
+                role: 'user',
+                content: prompt
+              }
+            ]
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': process.env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            timeout: 10000
+          }
+        );
+
+        return response.data.content[0].text;
+      } catch (error) {
+        console.error(`Anthropic API attempt ${attempt} failed:`, error.response?.data || error.message);
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+          continue;
+        }
+        throw error;
+      }
     }
   }
 
@@ -280,7 +337,7 @@ Return JSON:
     `;
 
     try {
-      const response = await this.callGeminiAPI(prompt);
+      const response = await this.callLLM(prompt);
       const cleanResponse = response.replace(/```json\n|\n```|```/g, '').trim();
       return JSON.parse(cleanResponse);
     } catch (error) {
@@ -869,7 +926,7 @@ ${Object.entries(results).slice(0, 3).map(([type, records]) =>
 Provide insights about patterns, priorities, and recommendations based on the search criteria.
       `;
 
-      return await this.callGeminiAPI(analysisPrompt);
+      return await this.callLLM(analysisPrompt);
     } catch (error) {
       return 'Analysis failed but raw results are available';
     }

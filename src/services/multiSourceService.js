@@ -30,62 +30,22 @@ class MultiSourceService {
     - "red accounts" → {"needsSearch": true, "searchTerms": ["health", "risk", "issues"], "searchType": "accounts"}
     `;
 
-    // Retry logic for rate limits
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        console.log(`Gemini API attempt ${attempt}/3 for intent analysis`);
-        
-        // Using Google Gemini API
-        const response = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL || 'gemini-1.5-flash'}:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          contents: [{
-            parts: [{
-              text: prompt
-            }]
-          }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 100
-          }
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-        const generatedText = response.data.candidates[0].content.parts[0].text;
-        
-        // Clean up markdown wrapping if present
-        const cleanText = generatedText.replace(/```json\n|\n```|```/g, '').trim();
-        const intentAnalysis = JSON.parse(cleanText);
-        
-        console.log(`Gemini API success: Intent analysis:`, intentAnalysis);
-        return intentAnalysis;
-        
-      } catch (error) {
-        console.error(`Gemini API attempt ${attempt} failed:`, error.response?.status, error.message);
-        
-        if (error.response?.status === 429) {
-          // Rate limit hit - wait before retry
-          const waitTime = attempt * 2000; // 2s, 4s, 6s
-          console.log(`Rate limit hit, waiting ${waitTime}ms before retry...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          continue; // Try again
-        }
-        
-        if (attempt === 3) {
-          // Last attempt failed - use fallback
-          console.log('All Gemini API attempts failed, using fallback intent analysis');
-          return this.fallbackIntentAnalysis(userPrompt);
-        }
-      }
+    try {
+      console.log('🧠 Analyzing user intent with LLM...');
+      const response = await this.callLLM(prompt);
+      
+      // Clean up markdown wrapping if present
+      const cleanText = response.replace(/```json\n|\n```|```/g, '').trim();
+      const intentAnalysis = JSON.parse(cleanText);
+      
+      console.log('✅ Intent analysis successful:', intentAnalysis);
+      return intentAnalysis;
+      
+    } catch (error) {
+      console.error('❌ Intent analysis failed:', error.message);
+      console.log('🔄 Using fallback intent analysis');
+      return this.fallbackIntentAnalysis(userPrompt);
     }
-    
-    // Should never reach here, but fallback just in case
-    return this.fallbackIntentAnalysis(userPrompt);
   }
 
   fallbackIntentAnalysis(userPrompt) {
@@ -223,29 +183,11 @@ class MultiSourceService {
     `;
 
     try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          contents: [{
-            parts: [{
-              text: analysisPrompt
-            }]
-          }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 200
-          }
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      return response.data.candidates[0].content.parts[0].text;
+      console.log('🧠 Performing AI analysis of results...');
+      const response = await this.callLLM(analysisPrompt);
+      return response;
     } catch (error) {
-      console.error('AI analysis failed:', error.message);
+      console.error('❌ AI analysis failed:', error.message);
       return null;
     }
   }
@@ -287,29 +229,11 @@ class MultiSourceService {
     `;
 
     try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          contents: [{
-            parts: [{
-              text: followUpPrompt
-            }]
-          }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 300
-          }
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      return response.data.candidates[0].content.parts[0].text;
+      console.log('🧠 Generating follow-up response...');
+      const response = await this.callLLM(followUpPrompt);
+      return response;
     } catch (error) {
-      console.error('Follow-up AI response failed:', error.message);
+      console.error('❌ Follow-up AI response failed:', error.message);
       return "Sorry, I couldn't process your question right now. Please try again.";
     }
   }
@@ -684,6 +608,95 @@ class MultiSourceService {
       blocks,
       response_type: "in_channel"
     };
+  }
+
+  // LLM fallback methods - same pattern as toolService.js
+  async callLLM(prompt) {
+    // Try Anthropic first
+    try {
+      console.log('🧠 Attempting Anthropic API...');
+      return await this.callAnthropicAPI(prompt);
+    } catch (anthropicError) {
+      console.warn('⚠️ Anthropic API failed, falling back to Gemini:', anthropicError.message);
+      try {
+        return await this.callGeminiAPI(prompt);
+      } catch (geminiError) {
+        console.error('❌ Both Anthropic and Gemini APIs failed');
+        throw new Error(`All LLM APIs failed - Anthropic: ${anthropicError.message}, Gemini: ${geminiError.message}`);
+      }
+    }
+  }
+
+  async callAnthropicAPI(prompt) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await axios.post(
+          'https://api.anthropic.com/v1/messages',
+          {
+            model: 'claude-3-haiku-20240307',
+            max_tokens: 2048,
+            temperature: 0.1,
+            messages: [
+              {
+                role: 'user',
+                content: prompt
+              }
+            ]
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': process.env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            timeout: 10000
+          }
+        );
+
+        return response.data.content[0].text;
+      } catch (error) {
+        console.error(`Anthropic API attempt ${attempt} failed:`, error.response?.data || error.message);
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  async callGeminiAPI(prompt) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${process.env.GEMINI_API_KEY}`,
+          {
+            contents: [{
+              parts: [{
+                text: prompt
+              }]
+            }],
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 500
+            }
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        return response.data.candidates[0].content.parts[0].text;
+      } catch (error) {
+        if (error.response?.status === 429 && attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 2000));
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 }
 
