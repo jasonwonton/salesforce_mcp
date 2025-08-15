@@ -375,11 +375,21 @@ function formatToolResults(toolResults) {
       responseText = `❓ **Need more info:** ${result.data}`;
       break;
     } else if (result.success && result.toolName === 'search_salesforce') {
-      // Show the original query
-      responseText += `🔍 **Searched for:** "${result.query}"\n`;
-      if (result.keywords && result.keywords.length > 0) {
-        responseText += `📝 **Keywords:** ${result.keywords.join(', ')}\n\n`;
+      // Show the tool call details
+      responseText += `🔧 **Tool Call:** \`search_salesforce\`\n`;
+      responseText += `🔍 **Query:** "${result.parameters?.query || 'N/A'}"\n`;
+      
+      if (result.parameters?.objectTypes) {
+        responseText += `📊 **Objects:** ${result.parameters.objectTypes.join(', ')}\n`;
       }
+      if (result.parameters?.timeRange) {
+        responseText += `⏰ **Time Range:** ${result.parameters.timeRange}\n`;
+      }
+      if (result.parameters?.keywords && result.parameters.keywords.length > 0) {
+        responseText += `🔑 **Keywords:** ${result.parameters.keywords.join(', ')}\n`;
+      }
+      
+      responseText += `🎯 **Strategy:** ${result.searchStrategy || 'Unknown'}\n\n`;
       
       const data = result.data;
       let totalResults = 0;
@@ -504,28 +514,26 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
     for (let i = 0; i < pendingPlan.toolPlan.selectedTools.length; i++) {
       const toolCall = pendingPlan.toolPlan.selectedTools[i];
       
-      // Show current tool execution in thread with query details
+      // Show current tool execution in thread with complete tool call details
       let progressMessage = `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`;
       
-      // Add query details if it's search_salesforce
+      // Show complete tool call structure
+      progressMessage += `\n\n🔧 **Tool Call:**\n\`\`\`json\n${JSON.stringify(toolCall, null, 2)}\n\`\`\``;
+      
+      // Add specific details for search_salesforce
       if (toolCall.toolName === 'search_salesforce') {
         const query = toolCall.parameters.query || 'No query specified';
-        progressMessage += `\n\n🔍 **Query:** ${query}`;
+        progressMessage += `\n\n🔍 **Human Query:** "${query}"`;
         
-        // Add parsed parameters if available
+        // Show what the system extracted/parsed
         if (toolCall.parameters.objectTypes) {
-          progressMessage += `\n📊 **Objects:** ${toolCall.parameters.objectTypes.join(', ')}`;
+          progressMessage += `\n📊 **Target Objects:** ${toolCall.parameters.objectTypes.join(', ')}`;
         }
         if (toolCall.parameters.timeRange) {
-          progressMessage += `\n⏰ **Time Range:** ${toolCall.parameters.timeRange}`;
+          progressMessage += `\n⏰ **Time Filter:** ${toolCall.parameters.timeRange}`;
         }
         if (toolCall.parameters.keywords && toolCall.parameters.keywords.length > 0) {
-          progressMessage += `\n🔑 **Keywords:** ${toolCall.parameters.keywords.join(', ')}`;
-        }
-        
-        // Add actual query details
-        if (toolCall.parameters.objectTypes && toolCall.parameters.objectTypes.includes('Case')) {
-          progressMessage += `\n\n📝 **SOQL Query:** \`SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Account.AnnualRevenue FROM Case WHERE Status = 'Closed' AND CreatedDate = LAST_N_DAYS:30 ORDER BY CreatedDate DESC\``;
+          progressMessage += `\n🔑 **Extracted Keywords:** ${toolCall.parameters.keywords.join(', ')}`;
         }
       }
       
@@ -558,6 +566,17 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
             completionMessage += `\n  • ${type}: ${records.length} records`;
           }
         });
+        
+        // Show the search strategy and example queries that were executed
+        if (result.searchStrategy) {
+          completionMessage += `\n\n🎯 **Strategy Used:** ${result.searchStrategy}`;
+        }
+        
+        // Show example queries (this will be visible in logs, but let's add a note)
+        completionMessage += `\n\n📝 **Executed Queries:**`;
+        completionMessage += `\n• SOSL: \`FIND {keyword} RETURNING ObjectType(Id)\``;
+        completionMessage += `\n• SOQL: \`SELECT fields FROM ObjectType WHERE conditions\``;
+        completionMessage += `\n\n💡 **Tip:** Check server logs for exact query details`;
       }
       
       await client.chat.postMessage({
