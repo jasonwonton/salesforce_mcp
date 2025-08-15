@@ -444,26 +444,35 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
   try {
     const toolService = new ToolService(pendingPlan.team);
     
-    // Execute each tool and show progress
+    // Create a thread for the execution
+    const threadMessage = await client.chat.postMessage({
+      channel: pendingPlan.channelId,
+      text: "🚀 **Executing Plan in Thread**\n\nI'll show you the progress and results here.",
+      thread_ts: body.message.ts
+    });
+    
+    // Execute each tool and show progress in the thread
     const toolResults = [];
     
     for (let i = 0; i < pendingPlan.toolPlan.selectedTools.length; i++) {
       const toolCall = pendingPlan.toolPlan.selectedTools[i];
       
-      // Show current tool execution
-      await respond({
+      // Show current tool execution in thread
+      await client.chat.postMessage({
+        channel: pendingPlan.channelId,
         text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
-        response_type: "ephemeral"
+        thread_ts: body.message.ts
       });
       
       const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
       toolResults.push(result);
       
-      // Show completion
+      // Show completion in thread
       const status = result.success ? "✅" : "❌";
-      await respond({
+      await client.chat.postMessage({
+        channel: pendingPlan.channelId,
         text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
-        response_type: "ephemeral"
+        thread_ts: body.message.ts
       });
     }
     
@@ -471,24 +480,27 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
     let finalResponse = "📋 **Results:**\n\n";
     finalResponse += formatToolResults(toolResults);
     
-    // Send final results
-    await respond({
+    // Send final results in thread
+    await client.chat.postMessage({
+      channel: pendingPlan.channelId,
       text: finalResponse,
-      response_type: "in_channel"
+      thread_ts: body.message.ts
     });
     
-    // Send follow-up guidance as successive messages
+    // Send follow-up guidance in thread
     setTimeout(async () => {
-      await respond({
-        text: "💬 **Want to ask questions about these results?**\nType: `/station ask [your question]`\n\nExample: `/station ask What are the main issues?`",
-        response_type: "ephemeral"
+      await client.chat.postMessage({
+        channel: pendingPlan.channelId,
+        text: "💬 **Ask me anything about these results!** I'll remember the context for follow-up questions.",
+        thread_ts: body.message.ts
       });
     }, 1000);
     
     setTimeout(async () => {
-      await respond({
-        text: "🔍 **Ready for a new search?**\nType: `/station [your request]`\n\nExample: `/station Recent billing issues for Enterprise accounts`",
-        response_type: "ephemeral"
+      await client.chat.postMessage({
+        channel: pendingPlan.channelId,
+        text: "🔍 **Ready for a new search?** Use `/station [your request]` to start fresh!",
+        thread_ts: body.message.ts
       });
     }, 2000);
     
@@ -497,9 +509,10 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
     
   } catch (error) {
     console.error('Plan execution error:', error);
-    await respond({
+    await client.chat.postMessage({
+      channel: pendingPlan.channelId,
       text: `❌ **Plan execution failed:** ${error.message}`,
-      response_type: "ephemeral"
+      thread_ts: body.message.ts
     });
   }
 });
