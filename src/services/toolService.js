@@ -186,6 +186,9 @@ Return ONLY JSON, no markdown.
         objectTypes: searchStrategy.objectTypes 
       };
       
+      // Initialize query tracking
+      this.lastExecutedQueries = [];
+      
       let searchResults = {};
       let strategy = '';
       
@@ -216,7 +219,8 @@ Return ONLY JSON, no markdown.
         data: searchResults,
         deepAnalysis: analysis,
         searchStrategy: strategy,
-        parameters: params
+        parameters: params,
+        executedQueries: this.lastExecutedQueries || []
       };
 
     } catch (error) {
@@ -305,6 +309,8 @@ Return JSON:
           const soslQuery = `FIND {${keyword}} RETURNING ${objectType}(Id)`;
           
           console.log(`  🔍 SOSL for ${objectType} with keyword "${keyword}": ${soslQuery}`);
+          this.lastExecutedQueries.push({ type: 'SOSL', query: soslQuery });
+          
           const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
           
           const foundIds = soslResult.searchRecords ? soslResult.searchRecords.map(r => r.Id) : [];
@@ -479,6 +485,7 @@ Return JSON:
   // Helper: Filter records using SOQL
   async filterRecordsWithSOQL(objectType, recordIds, params) {
     const soqlQuery = this.buildSOQLQuery(objectType, params, recordIds);
+    this.lastExecutedQueries.push({ type: 'SOQL', query: soqlQuery });
     
     try {
       const response = await this.salesforceService.executeSOQLQuery(soqlQuery);
