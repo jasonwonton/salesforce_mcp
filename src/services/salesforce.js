@@ -29,6 +29,17 @@ class SalesforceService {
       return response.data;
     } catch (error) {
       console.error('SOQL query failed:', error.response?.data || error.message);
+      
+      // Try to refresh token if session expired
+      if (error.response?.data?.[0]?.errorCode === 'INVALID_SESSION_ID') {
+        console.log('Attempting to refresh Salesforce token...');
+        const refreshed = await this.refreshAccessToken();
+        if (refreshed) {
+          // Retry the query with new token
+          return this.executeSOQLQuery(query);
+        }
+      }
+      
       throw new Error(`SOQL query failed: ${error.response?.data?.message || error.message}`);
     }
   }
@@ -58,6 +69,17 @@ class SalesforceService {
       return response.data;
     } catch (error) {
       console.error('SOSL query failed:', error.response?.data || error.message);
+      
+      // Try to refresh token if session expired
+      if (error.response?.data?.[0]?.errorCode === 'INVALID_SESSION_ID') {
+        console.log('Attempting to refresh Salesforce token...');
+        const refreshed = await this.refreshAccessToken();
+        if (refreshed) {
+          // Retry the query with new token
+          return this.executeSOSLQuery(soslQuery);
+        }
+      }
+      
       throw new Error(`SOSL query failed: ${error.response?.data?.message || error.message}`);
     }
   }
@@ -196,6 +218,47 @@ class SalesforceService {
       blocks,
       response_type: "in_channel"
     };
+  }
+
+  async refreshAccessToken() {
+    if (!this.team.salesforce_refresh_token) {
+      console.error('No refresh token available');
+      return false;
+    }
+
+    try {
+      const response = await axios.post('https://login.salesforce.com/services/oauth2/token', null, {
+        params: {
+          grant_type: 'refresh_token',
+          refresh_token: this.team.salesforce_refresh_token,
+          client_id: process.env.SALESFORCE_CLIENT_ID,
+          client_secret: process.env.SALESFORCE_CLIENT_SECRET
+        },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+
+      if (response.data.access_token) {
+        // Update the access token
+        this.accessToken = response.data.access_token;
+        this.team.salesforce_access_token = response.data.access_token;
+        
+        // Update in database
+        const db = require('../database');
+        await db('teams').where('id', this.team.id).update({
+          salesforce_access_token: response.data.access_token
+        });
+
+        console.log('✅ Salesforce token refreshed successfully');
+        return true;
+      }
+    } catch (error) {
+      console.error('Failed to refresh Salesforce token:', error.response?.data || error.message);
+      return false;
+    }
+
+    return false;
   }
 }
 
