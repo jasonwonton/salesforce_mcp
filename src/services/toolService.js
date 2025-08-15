@@ -332,6 +332,39 @@ Return JSON:
           const filteredRecords = await this.filterRecordsWithSOQL(objectType, combinedIds, params);
           results[`${objectType.toLowerCase()}s`] = filteredRecords;
           console.log(`  ✅ Final ${objectType} results: ${filteredRecords.length} records`);
+        } else if (objectType === 'Case') {
+          // Special fallback for Cases: search by Account relationship
+          console.log(`  🔄 No Case IDs from SOSL, trying Account-based Case search...`);
+          
+          // If we found accounts with the keywords, search for cases linked to those accounts
+          if (results.accounts && results.accounts.length > 0) {
+            const accountIds = results.accounts.map(acc => acc.Id);
+            const accountCaseQuery = `SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Account.AnnualRevenue, Contact.Name FROM Case WHERE AccountId IN ('${accountIds.join("','")}') AND CreatedDate = LAST_N_DAYS:90 ORDER BY CreatedDate DESC LIMIT 1000`;
+            
+            this.lastExecutedQueries.push({ type: 'SOQL', query: accountCaseQuery });
+            console.log(`  🔍 Searching Cases linked to found Accounts: ${accountCaseQuery}`);
+            
+            try {
+              const response = await this.salesforceService.executeSOQLQuery(accountCaseQuery);
+              results.cases = response.records || [];
+              console.log(`  ✅ Account-linked Cases: ${response.records?.length || 0} records`);
+            } catch (error) {
+              console.error(`❌ Account-linked Case search failed:`, error.message);
+            }
+          } else {
+            // Try searching by Account name directly in SOQL
+            const accountNameQuery = this.buildAccountNameCaseQuery(params);
+            if (accountNameQuery) {
+              this.lastExecutedQueries.push({ type: 'SOQL', query: accountNameQuery });
+              try {
+                const response = await this.salesforceService.executeSOQLQuery(accountNameQuery);
+                results.cases = response.records || [];
+                console.log(`  ✅ Account name Case search: ${response.records?.length || 0} records`);
+              } catch (error) {
+                console.error(`❌ Account name Case search failed:`, error.message);
+              }
+            }
+          }
         }
         
       } catch (error) {
@@ -340,6 +373,7 @@ Return JSON:
         try {
           console.log(`  🔄 SOSL failed, trying direct SOQL for ${objectType}...`);
           const soqlQuery = this.buildSOQLQuery(objectType, params);
+          this.lastExecutedQueries.push({ type: 'SOQL', query: soqlQuery });
           const response = await this.salesforceService.executeSOQLQuery(soqlQuery);
           results[`${objectType.toLowerCase()}s`] = response.records || [];
         } catch (soqlError) {
@@ -469,6 +503,22 @@ Return JSON:
       console.error('  Stack:', error.stack);
       return { accounts: [], contacts: [], cases: [], opportunities: [] };
     }
+  }
+
+  // Helper: Build Case query that searches by Account name in SOQL
+  buildAccountNameCaseQuery(params) {
+    if (!params.keywords || params.keywords.length === 0) return null;
+    
+    const timeCondition = params.timeRange && params.timeRange !== 'all_time' 
+      ? `AND ${this.getTimeCondition(params.timeRange)}` 
+      : '';
+    
+    // Search for cases where Account name contains any of the keywords
+    const accountConditions = params.keywords.map(keyword => 
+      `Account.Name LIKE '%${keyword}%'`
+    ).join(' OR ');
+    
+    return `SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Account.AnnualRevenue, Contact.Name FROM Case WHERE (${accountConditions}) ${timeCondition} ORDER BY CreatedDate DESC LIMIT 1000`;
   }
 
   // Helper: Discover records using SOSL
