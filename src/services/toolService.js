@@ -113,7 +113,7 @@ Return ONLY JSON, no markdown.
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const response = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL || 'gemini-1.5-flash'}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${process.env.GEMINI_API_KEY}`,
           {
             contents: [{
               parts: [{
@@ -166,17 +166,54 @@ Return ONLY JSON, no markdown.
       };
     }
     
-    // Default to case search with keywords
-    const keywords = userRequest.split(' ').filter(word => word.length > 2);
+    // Smart keyword extraction - skip common words
+    const stopWords = ['get', 'find', 'show', 'search', 'recent', 'support', 'cases', 'related', 'to', 'with', 'the', 'a', 'an', 'and', 'or', 'for', 'from', 'all', 'that', 'are', 'is'];
+    const words = userRequest.split(/\s+|[,&]+/).map(w => w.trim()).filter(w => w.length > 2);
+    const keywords = words.filter(word => !stopWords.includes(word.toLowerCase()));
+    
+    // Determine object type
+    let object = 'Case'; // default
+    let timeframe = 'last_30_days';
+    let deepAnalysis = 'true';
+    
+    if (lower.includes('opportunit') || lower.includes('deal') || lower.includes('revenue') || lower.includes('$') || lower.includes('sales')) {
+      object = 'Opportunity';
+    } else if (lower.includes('account') || lower.includes('company') || lower.includes('client')) {
+      object = 'Account';
+    } else if (lower.includes('contact') || lower.includes('person') || lower.includes('email')) {
+      object = 'Contact';
+    }
+    
+    // Multi-object search if mentions multiple types
+    const hasMultipleObjects = (lower.includes('account') && lower.includes('case')) || 
+                              (lower.includes('opportunit') && lower.includes('account')) ||
+                              lower.includes('everything') || lower.includes('all data');
+    
+    if (hasMultipleObjects) {
+      return {
+        reasoning: 'Multi-object search detected - using cross_object_search',
+        selectedTools: [{ 
+          toolName: 'cross_object_search',
+          parameters: { 
+            keywords: keywords.slice(0, 3),
+            objects: ['Account', 'Case', 'Opportunity', 'Contact'],
+            timeframe,
+            deepAnalysis
+          } 
+        }]
+      };
+    }
+    
+    // Single object search
     return {
-      reasoning: 'General search request - defaulting to case search',
+      reasoning: `Fallback: ${object} search with smart keyword extraction`,
       selectedTools: [{ 
         toolName: 'search_records',
         parameters: { 
-          object: 'Case', 
+          object,
           keywords: keywords.slice(0, 3),
-          timeframe: 'last_30_days',
-          deepAnalysis: 'true'
+          timeframe,
+          deepAnalysis
         } 
       }]
     };
