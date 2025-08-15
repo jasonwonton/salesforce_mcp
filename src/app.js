@@ -53,7 +53,7 @@ slackApp.command('/station', async ({ command, ack, respond, context, client }) 
   
   const userPrompt = command.text.trim();
   if (!userPrompt) {
-    await respond('Usage: `/station [describe what you\'re looking for]`\nExample: `/station customer billing issues from last week`\n\nOr approve a plan: `/station approve` to execute the proposed plan.\nOr ask follow-up questions: `/station ask [your question]`');
+    await respond('Usage: `/station [describe what you\'re looking for]`\nExample: `/station customer billing issues from last week`\n\nOr approve a plan: `/station approve` to execute the proposed plan.\nOr ask follow-up questions: `/station ask [your question]`\n\n💬 **Tip:** You can also DM me directly for follow-up questions after a search!');
     return;
   }
 
@@ -436,10 +436,9 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
   }
 
   // Execute the approved plan
-  await client.chat.postMessage({
-    channel: pendingPlan.channelId,
+  await respond({
     text: "✅ **Plan approved!** Executing tools...",
-    thread_ts: body.message.ts
+    response_type: "ephemeral"
   });
 
   try {
@@ -452,10 +451,9 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
       const toolCall = pendingPlan.toolPlan.selectedTools[i];
       
       // Show current tool execution
-      await client.chat.postMessage({
-        channel: pendingPlan.channelId,
+      await respond({
         text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
-        thread_ts: body.message.ts
+        response_type: "ephemeral"
       });
       
       const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
@@ -463,10 +461,9 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
       
       // Show completion
       const status = result.success ? "✅" : "❌";
-      await client.chat.postMessage({
-        channel: pendingPlan.channelId,
+      await respond({
         text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
-        thread_ts: body.message.ts
+        response_type: "ephemeral"
       });
     }
     
@@ -475,23 +472,23 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
     finalResponse += formatToolResults(toolResults);
     
     // Send final results
-    await say({
+    await respond({
       text: finalResponse,
-      thread_ts: body.message.ts
+      response_type: "in_channel"
     });
     
     // Send follow-up guidance as successive messages
     setTimeout(async () => {
-      await say({
+      await respond({
         text: "💬 **Want to ask questions about these results?**\nType: `/station ask [your question]`\n\nExample: `/station ask What are the main issues?`",
-        thread_ts: body.message.ts
+        response_type: "ephemeral"
       });
     }, 1000);
     
     setTimeout(async () => {
-      await say({
+      await respond({
         text: "🔍 **Ready for a new search?**\nType: `/station [your request]`\n\nExample: `/station Recent billing issues for Enterprise accounts`",
-        thread_ts: body.message.ts
+        response_type: "ephemeral"
       });
     }, 2000);
     
@@ -500,9 +497,9 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
     
   } catch (error) {
     console.error('Plan execution error:', error);
-    await say({
+    await respond({
       text: `❌ **Plan execution failed:** ${error.message}`,
-      thread_ts: body.message.ts
+      response_type: "ephemeral"
     });
   }
 });
@@ -666,11 +663,65 @@ slackApp.action('ask_nextsteps', async ({ body, ack, respond, context }) => {
   }
 });
 
-// Handle threaded message responses
-slackApp.message(async ({ message, say, context }) => {
-  // Only handle threaded messages (replies)
-  if (!message.thread_ts) return;
+// Handle direct messages and threaded responses
+slackApp.message(async ({ message, say, context, client }) => {
+  // Skip bot messages and messages in channels
+  if (message.bot_id || message.channel_type === 'C') return;
   
+  // Handle direct messages (DM with bot)
+  if (message.channel_type === 'IM') {
+    await handleDirectMessage(message, say, context, client);
+    return;
+  }
+  
+  // Handle threaded messages (replies in channels)
+  if (message.thread_ts) {
+    await handleThreadedMessage(message, say, context, client);
+    return;
+  }
+});
+
+// Handle direct messages with the bot
+async function handleDirectMessage(message, say, context, client) {
+  try {
+    const teamId = context.teamId;
+    let team = null;
+    
+    try {
+      team = await Team.findById(teamId);
+    } catch (error) {
+      console.error('Database connection failed:', error.message);
+      await say('❌ Sorry, I\'m having trouble connecting to your workspace. Please try again later.');
+      return;
+    }
+    
+    if (!team || !team.salesforce_access_token) {
+      await say('❌ **Salesforce not connected.** Please connect your Salesforce org first using the `/station` command in a channel, then come back here for follow-up questions.');
+      return;
+    }
+    
+    const userMessage = message.text.trim();
+    
+    // Show thinking
+    await say('🤔 **Analyzing your message...**');
+    
+    // Check if this is a follow-up question or new request
+    const isFollowUp = await isFollowUpQuestion(userMessage);
+    
+    if (isFollowUp) {
+      await handleFollowUpQuestion(userMessage, team, say, client);
+    } else {
+      await handleNewRequest(userMessage, team, say, client);
+    }
+    
+  } catch (error) {
+    console.error('Direct message error:', error);
+    await say(`❌ **Error:** Sorry, I encountered an error: ${error.message}`);
+  }
+}
+
+// Handle threaded messages in channels
+async function handleThreadedMessage(message, say, context, client) {
   // Check if this is a thread we're tracking
   global.activeThreads = global.activeThreads || {};
   const threadContext = global.activeThreads[message.thread_ts];
@@ -761,7 +812,111 @@ slackApp.message(async ({ message, say, context }) => {
       thread_ts: message.thread_ts
     });
   }
-});
+}
+
+// Handle new requests in DM
+async function handleNewRequest(userMessage, team, say, client) {
+  try {
+    const toolService = new ToolService(team);
+    
+    // Analyze request and create plan
+    let toolPlan;
+    try {
+      toolPlan = await toolService.analyzeRequestAndSelectTools(userMessage);
+    } catch (error) {
+      await say(`❌ **Analysis Failed:** Sorry, I had trouble understanding your request. Please try rephrasing it.\n\nError: ${error.message}`);
+      return;
+    }
+    
+    // Show plan
+    await say(`🎯 **Plan:** ${toolPlan.reasoning}\n\n🚀 **Executing...**`);
+    
+    // Execute tools with status updates
+    const toolResults = [];
+    for (let i = 0; i < toolPlan.selectedTools.length; i++) {
+      const toolCall = toolPlan.selectedTools[i];
+      
+      // Show what we're doing
+      await say(`⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`);
+      
+      const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
+      toolResults.push(result);
+      
+      // Show completion
+      const status = result.success ? "✅" : "❌";
+      await say(`${status} **Step ${i + 1}:** ${toolCall.toolName} complete`);
+    }
+    
+    // Format and send final results
+    let finalResponse = "📋 **Results:**\n\n";
+    finalResponse += formatToolResults(toolResults);
+    
+    await say(finalResponse);
+    
+    // Store context for follow-up questions
+    global.dmContexts = global.dmContexts || {};
+    global.dmContexts[team.id] = {
+      userRequest: userMessage,
+      toolResults,
+      timestamp: Date.now()
+    };
+    
+    // Provide guidance for follow-up
+    await say("💬 **Ask me anything about these results!** I'll remember the context for follow-up questions.");
+    
+  } catch (error) {
+    console.error('New request error:', error);
+    await say(`❌ **Error:** Sorry, there was an error processing your request: ${error.message}`);
+  }
+}
+
+// Handle follow-up questions in DM
+async function handleFollowUpQuestion(userMessage, team, say, client) {
+  try {
+    global.dmContexts = global.dmContexts || {};
+    const context = global.dmContexts[team.id];
+    
+    if (!context || !context.toolResults) {
+      await say("❌ **No context found.** Please start a new conversation by describing what you're looking for.");
+      return;
+    }
+    
+    // Check if context is still fresh (within 1 hour)
+    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    if (context.timestamp < oneHourAgo) {
+      await say("⏰ **Context expired.** Please start a new conversation by describing what you're looking for.");
+      delete global.dmContexts[team.id];
+      return;
+    }
+    
+    await say("💭 **Analyzing your follow-up question...**");
+    
+    // Generate contextual answer
+    const answer = await generateContextualAnswer(userMessage, context.toolResults);
+    
+    await say(`💬 **Answer:**\n\n${answer}`);
+    
+    // Update context timestamp
+    context.timestamp = Date.now();
+    
+  } catch (error) {
+    console.error('Follow-up question error:', error);
+    await say(`❌ **Error:** Sorry, I encountered an error: ${error.message}`);
+  }
+}
+
+// Helper: Determine if a message is a follow-up question
+async function isFollowUpQuestion(message) {
+  const followUpKeywords = [
+    'what about', 'how about', 'can you', 'could you', 'would you',
+    'what is', 'how is', 'why is', 'when is', 'where is',
+    'analyze', 'explain', 'describe', 'summarize', 'compare',
+    'trend', 'pattern', 'insight', 'recommendation', 'suggestion'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  return followUpKeywords.some(keyword => lowerMessage.includes(keyword));
+}
 
 // Helper function to determine if new search is needed
 async function shouldSearchForNewData(question, originalRequest) {
