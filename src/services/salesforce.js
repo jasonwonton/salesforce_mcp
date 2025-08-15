@@ -40,6 +40,12 @@ class SalesforceService {
         }
       }
       
+      // Check for session expired errors
+      const errorData = error.response?.data;
+      if (Array.isArray(errorData) && errorData[0]?.errorCode === 'INVALID_SESSION_ID') {
+        throw new Error('SALESFORCE_SESSION_EXPIRED');
+      }
+      
       throw new Error(`SOQL query failed: ${error.response?.data?.message || error.message}`);
     }
   }
@@ -78,6 +84,12 @@ class SalesforceService {
           // Retry the query with new token
           return this.executeSOSLQuery(soslQuery);
         }
+      }
+      
+      // Check for session expired errors
+      const errorData = error.response?.data;
+      if (Array.isArray(errorData) && errorData[0]?.errorCode === 'INVALID_SESSION_ID') {
+        throw new Error('SALESFORCE_SESSION_EXPIRED');
       }
       
       throw new Error(`SOSL query failed: ${error.response?.data?.message || error.message}`);

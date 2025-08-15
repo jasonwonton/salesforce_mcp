@@ -125,11 +125,21 @@ slackApp.command('/station', async ({ command, ack, respond, context, client }) 
       
     } catch (error) {
       console.error('Plan execution error:', error);
-      await client.chat.postMessage({
-        channel: command.channel_id,
-        text: `❌ **Plan execution failed:** ${error.message}`,
-        thread_ts: command.ts
-      });
+      
+      // Check for Salesforce session expiry
+      if (error.message === 'SALESFORCE_SESSION_EXPIRED') {
+        await client.chat.postMessage({
+          channel: command.channel_id,
+          text: `🔐 **Salesforce Session Expired**\n\nYour Salesforce connection has expired. Please reconnect:\n\n1. Use \`/station connect\` to reconnect to Salesforce\n2. Then try your search again\n\n💡 This happens for security - sessions expire after a period of inactivity.`,
+          thread_ts: command.ts
+        });
+      } else {
+        await client.chat.postMessage({
+          channel: command.channel_id,
+          text: `❌ **Plan execution failed:** ${error.message}`,
+          thread_ts: command.ts
+        });
+      }
     }
     return;
   }
@@ -573,11 +583,21 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
     
   } catch (error) {
     console.error('Plan execution error:', error);
-    await client.chat.postMessage({
-      channel: pendingPlan.channelId,
-      text: `❌ **Plan execution failed:** ${error.message}`,
-      thread_ts: body.message.ts
-    });
+    
+    // Check for Salesforce session expiry
+    if (error.message === 'SALESFORCE_SESSION_EXPIRED') {
+      await client.chat.postMessage({
+        channel: pendingPlan.channelId,
+        text: `🔐 **Salesforce Session Expired**\n\nYour Salesforce connection has expired. Please reconnect:\n\n1. Use \`/station connect\` to reconnect to Salesforce\n2. Then try your search again\n\n💡 This happens for security - sessions expire after a period of inactivity.`,
+        thread_ts: body.message.ts
+      });
+    } else {
+      await client.chat.postMessage({
+        channel: pendingPlan.channelId,
+        text: `❌ **Plan execution failed:** ${error.message}`,
+        thread_ts: body.message.ts
+      });
+    }
   }
 });
 
@@ -793,7 +813,13 @@ async function handleDirectMessage(message, say, context, client) {
     
   } catch (error) {
     console.error('Direct message error:', error);
-    await say(`❌ **Error:** Sorry, I encountered an error: ${error.message}`);
+    
+    // Check for Salesforce session expiry
+    if (error.message === 'SALESFORCE_SESSION_EXPIRED') {
+      await say(`🔐 **Salesforce Session Expired**\n\nYour Salesforce connection has expired. Please reconnect:\n\n1. Go to any channel and use \`/station connect\` to reconnect to Salesforce\n2. Then come back here and try your search again\n\n💡 This happens for security - sessions expire after a period of inactivity.`);
+    } else {
+      await say(`❌ **Error:** Sorry, I encountered an error: ${error.message}`);
+    }
   }
 }
 
@@ -943,7 +969,13 @@ async function handleNewRequest(userMessage, team, say, client) {
     
   } catch (error) {
     console.error('New request error:', error);
-    await say(`❌ **Error:** Sorry, there was an error processing your request: ${error.message}`);
+    
+    // Check for Salesforce session expiry
+    if (error.message === 'SALESFORCE_SESSION_EXPIRED') {
+      await say(`🔐 **Salesforce Session Expired**\n\nYour Salesforce connection has expired. Please reconnect:\n\n1. Go to any channel and use \`/station connect\` to reconnect to Salesforce\n2. Then come back here and try your search again\n\n💡 This happens for security - sessions expire after a period of inactivity.`);
+    } else {
+      await say(`❌ **Error:** Sorry, there was an error processing your request: ${error.message}`);
+    }
   }
 }
 
@@ -978,7 +1010,13 @@ async function handleFollowUpQuestion(userMessage, team, say, client) {
     
   } catch (error) {
     console.error('Follow-up question error:', error);
-    await say(`❌ **Error:** Sorry, I encountered an error: ${error.message}`);
+    
+    // Check for Salesforce session expiry
+    if (error.message === 'SALESFORCE_SESSION_EXPIRED') {
+      await say(`🔐 **Salesforce Session Expired**\n\nYour Salesforce connection has expired. Please reconnect:\n\n1. Go to any channel and use \`/station connect\` to reconnect to Salesforce\n2. Then come back here and try your search again\n\n💡 This happens for security - sessions expire after a period of inactivity.`);
+    } else {
+      await say(`❌ **Error:** Sorry, I encountered an error: ${error.message}`);
+    }
   }
 }
 
