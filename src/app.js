@@ -42,149 +42,13 @@ const slackApp = new App({
   receiver
 });
 
-// Simple /ask command with threaded conversation support
-slackApp.command('/ask', async ({ command, ack, respond, context }) => {
-  await ack();
 
-  try {
-    const teamId = context.teamId;
-    const team = await Team.findById(teamId);
-    
-    if (!team) {
-      await respond('Team not found. Please reinstall the app.');
-      return;
-    }
-
-    if (!team.salesforce_access_token) {
-      await respond({
-        text: 'Salesforce not connected. Please connect your Salesforce org first.',
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: "You need to connect your Salesforce org to use this command."
-            },
-            accessory: {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "Connect Salesforce"
-              },
-              url: `${process.env.APP_URL}/oauth/salesforce/connect/${teamId}`
-            }
-          }
-        ]
-      });
-      return;
-    }
-
-    const userRequest = command.text.trim();
-    
-    if (!userRequest) {
-      await respond('Please provide a question or request.\n\nExample: `/ask Recent support cases for Enterprise accounts`');
-      return;
-    }
-
-    // Show thinking message
-    const thinkingResponse = await respond({
-      text: `🤔 Analyzing your request: "${userRequest}"`,
-      response_type: "in_channel"
-    });
-
-    // Initialize tool service
-    const toolService = new ToolService(team);
-    
-    // Analyze request and create plan
-    let toolPlan;
-    try {
-      toolPlan = await toolService.analyzeRequestAndSelectTools(userRequest);
-    } catch (error) {
-      console.error('Tool analysis failed:', error);
-      await respond({
-        text: `❌ Sorry, I had trouble understanding your request. Please try rephrasing it.\n\nError: ${error.message}`,
-        response_type: "ephemeral"
-      });
-      return;
-    }
-
-    // Execute tools with status updates
-    await respond({
-      text: `🎯 **Plan:** ${toolPlan.reasoning}\n\n🚀 Executing...`,
-      response_type: "in_channel"
-    });
-
-    const toolResults = [];
-    for (let i = 0; i < toolPlan.selectedTools.length; i++) {
-      const toolCall = toolPlan.selectedTools[i];
-      
-      // Show what we're doing
-      await respond({
-        text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
-        response_type: "in_channel"
-      });
-      
-      const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
-      toolResults.push(result);
-      
-      // Show completion
-      const status = result.success ? "✅" : "❌";
-      await respond({
-        text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
-        response_type: "in_channel"
-      });
-    }
-
-    // Format and send final results
-    let finalResponse = "📋 **Results:**\n\n";
-    finalResponse += formatToolResults(toolResults);
-    
-    const finalMessage = await respond({
-      text: finalResponse,
-      response_type: "in_channel"
-    });
-
-    // Store thread context for follow-up responses
-    global.activeThreads = global.activeThreads || {};
-    global.activeThreads[finalMessage.ts] = {
-      teamId,
-      userRequest,
-      toolResults,
-      timestamp: Date.now()
-    };
-
-    // Provide guidance for follow-up
-    setTimeout(async () => {
-      await respond({
-        text: "💬 You can ask follow-up questions by replying to this thread, or start a new search with `/ask [new question]`",
-        response_type: "ephemeral"
-      });
-    }, 1000);
-    
-    // Log usage
-    await db('usage_logs').insert({
-      team_id: teamId,
-      slack_user_id: command.user_id,
-      command: '/ask',
-      query_text: userRequest,
-      results_count: toolResults.length
-    });
-
-    // Format and send response
-    const formattedResponse = salesforceService.formatResultsForSlack(cases);
-    await respond(formattedResponse);
-
-  } catch (error) {
-    console.error('Support command error:', error);
-    await respond('Sorry, there was an error processing your request. Please try again.');
-  }
-});
 
 // Store for pending plans (in production, use Redis or database)
 global.pendingPlans = global.pendingPlans || {};
 
 // Station slash command handler - AI-powered multi-source search with Claude Code-like planning
-slackApp.command('/station', async ({ command, ack, respond, context }) => {
+slackApp.command('/station', async ({ command, ack, respond, context, say }) => {
   await ack();
   
   const userPrompt = command.text.trim();
@@ -209,9 +73,9 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
     }
 
     // Execute the approved plan
-    await respond({
+    await say({
       text: "✅ **Plan approved!** Executing tools...",
-      response_type: "ephemeral"
+      thread_ts: command.ts
     });
 
     try {
@@ -219,36 +83,37 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
       
       // Execute each tool and show progress
       const toolResults = [];
-      let progressText = "🚀 **Executing Plan:**\n\n";
       
       for (let i = 0; i < pendingPlan.toolPlan.selectedTools.length; i++) {
         const toolCall = pendingPlan.toolPlan.selectedTools[i];
         
         // Show current tool execution
-        progressText += `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...\n`;
-        await respond({
-          text: progressText,
-          response_type: "in_channel"
+        await say({
+          text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
+          thread_ts: command.ts
         });
         
         const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
         toolResults.push(result);
         
-        // Update progress
+        // Show completion
         const status = result.success ? "✅" : "❌";
-        progressText = progressText.replace(`⏳ **Step ${i + 1}:**`, `${status} **Step ${i + 1}:**`);
+        await say({
+          text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
+          thread_ts: command.ts
+        });
       }
       
       // Format final results
-      let finalResponse = progressText + "\n📋 **Results:**\n\n";
+      let finalResponse = "📋 **Results:**\n\n";
       finalResponse += formatToolResults(toolResults);
       
       // Add conversation continuation
       finalResponse += "\n💬 **Continue the conversation:** Type `/station ask [question]` to analyze these results further.";
       
-      await respond({
+      await say({
         text: finalResponse,
-        response_type: "in_channel"
+        thread_ts: command.ts
       });
       
       // Clear the pending plan
@@ -256,7 +121,10 @@ slackApp.command('/station', async ({ command, ack, respond, context }) => {
       
     } catch (error) {
       console.error('Plan execution error:', error);
-      await respond(`❌ **Plan execution failed:** ${error.message}`);
+      await say({
+        text: `❌ **Plan execution failed:** ${error.message}`,
+        thread_ts: command.ts
+      });
     }
     return;
   }
@@ -547,7 +415,7 @@ function formatToolResults(toolResults) {
   return responseText;
 }
 // Handle plan approval button
-slackApp.action('approve_plan', async ({ body, ack, respond, context }) => {
+slackApp.action('approve_plan', async ({ body, ack, respond, context, say }) => {
   await ack();
   
   const planKey = body.actions[0].value;
@@ -562,9 +430,9 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context }) => {
   }
 
   // Execute the approved plan
-  await respond({
+  await say({
     text: "✅ **Plan approved!** Executing tools...",
-    response_type: "ephemeral"
+    thread_ts: body.message.ts
   });
 
   try {
@@ -572,48 +440,49 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context }) => {
     
     // Execute each tool and show progress
     const toolResults = [];
-    let progressText = "🚀 **Executing Plan:**\n\n";
     
     for (let i = 0; i < pendingPlan.toolPlan.selectedTools.length; i++) {
       const toolCall = pendingPlan.toolPlan.selectedTools[i];
       
       // Show current tool execution
-      progressText += `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...\n`;
-      await respond({
-        text: progressText,
-        response_type: "in_channel"
+      await say({
+        text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
+        thread_ts: body.message.ts
       });
       
       const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
       toolResults.push(result);
       
-      // Update progress
+      // Show completion
       const status = result.success ? "✅" : "❌";
-      progressText = progressText.replace(`⏳ **Step ${i + 1}:**`, `${status} **Step ${i + 1}:**`);
+      await say({
+        text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
+        thread_ts: body.message.ts
+      });
     }
     
     // Format final results
-    let finalResponse = progressText + "\n📋 **Results:**\n\n";
+    let finalResponse = "📋 **Results:**\n\n";
     finalResponse += formatToolResults(toolResults);
     
-    // Send final results without action buttons
-    await respond({
+    // Send final results
+    await say({
       text: finalResponse,
-      response_type: "in_channel"
+      thread_ts: body.message.ts
     });
     
     // Send follow-up guidance as successive messages
     setTimeout(async () => {
-      await respond({
+      await say({
         text: "💬 **Want to ask questions about these results?**\nType: `/station ask [your question]`\n\nExample: `/station ask What are the main issues?`",
-        response_type: "ephemeral"
+        thread_ts: body.message.ts
       });
     }, 1000);
     
     setTimeout(async () => {
-      await respond({
+      await say({
         text: "🔍 **Ready for a new search?**\nType: `/station [your request]`\n\nExample: `/station Recent billing issues for Enterprise accounts`",
-        response_type: "ephemeral"
+        thread_ts: body.message.ts
       });
     }, 2000);
     
@@ -622,7 +491,10 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context }) => {
     
   } catch (error) {
     console.error('Plan execution error:', error);
-    await respond(`❌ **Plan execution failed:** ${error.message}`);
+    await say({
+      text: `❌ **Plan execution failed:** ${error.message}`,
+      thread_ts: body.message.ts
+    });
   }
 });
 

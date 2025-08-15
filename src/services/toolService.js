@@ -166,35 +166,50 @@ Return ONLY JSON, no markdown.
     }
 
     try {
-      console.log('🔍 Search Salesforce starting with params:', params);
+      console.log('🔍 Search Salesforce starting with params:', JSON.stringify(params, null, 2));
+      
+      // Parse natural language query if only 'query' parameter is provided
+      let parsedParams = params;
+      if (params.query && !params.keywords && !params.objectTypes) {
+        console.log('🔄 Parsing natural language query:', params.query);
+        parsedParams = this.parseNaturalLanguageQuery(params.query);
+        console.log('✅ Parsed parameters:', JSON.stringify(parsedParams, null, 2));
+      }
       
       // Determine search strategy based on parameters
-      const hasKeywords = params.keywords && params.keywords.length > 0;
-      const hasStructuredFilters = params.timeRange || params.opportunityStage || params.minAmount || 
-                                  params.maxAmount || params.caseStatus || params.casePriority || 
-                                  params.accountType || params.accountHealth || params.contactRole;
+      const hasKeywords = parsedParams.keywords && parsedParams.keywords.length > 0;
+      const hasStructuredFilters = parsedParams.timeRange || parsedParams.opportunityStage || parsedParams.minAmount || 
+                                  parsedParams.maxAmount || parsedParams.caseStatus || parsedParams.casePriority || 
+                                  parsedParams.accountType || parsedParams.accountHealth || parsedParams.contactRole;
+      
+      console.log('📊 Strategy Analysis:');
+      console.log('  - Has Keywords:', hasKeywords);
+      console.log('  - Has Structured Filters:', hasStructuredFilters);
+      console.log('  - Keywords:', parsedParams.keywords);
+      console.log('  - Time Range:', parsedParams.timeRange);
+      console.log('  - Object Types:', parsedParams.objectTypes);
       
       let searchResults = {};
       
       // Strategy 1: Combined SOSL + SOQL (keywords + structured filters)
       if (hasKeywords && hasStructuredFilters) {
         console.log('📊 Using combined SOSL + SOQL strategy');
-        searchResults = await this.searchWithSOSLAndSOQL(params);
+        searchResults = await this.searchWithSOSLAndSOQL(parsedParams);
       }
       // Strategy 2: Pure SOQL (structured filters only)
       else if (!hasKeywords && hasStructuredFilters) {
         console.log('📊 Using pure SOQL strategy');
-        searchResults = await this.searchWithSOQLOnly(params);
+        searchResults = await this.searchWithSOQLOnly(parsedParams);
       }
       // Strategy 3: Pure SOSL (keywords only, cross-object)
       else if (hasKeywords && !hasStructuredFilters) {
         console.log('📊 Using pure SOSL strategy');
-        searchResults = await this.searchWithSOSLOnly(params);
+        searchResults = await this.searchWithSOSLOnly(parsedParams);
       }
       // Strategy 4: Default fallback
       else {
         console.log('📊 Using default search strategy');
-        searchResults = await this.searchWithDefaultStrategy(params);
+        searchResults = await this.searchWithDefaultStrategy(parsedParams);
       }
 
       // Deep analysis if requested
@@ -252,13 +267,34 @@ Return ONLY JSON, no markdown.
     const results = { accounts: [], contacts: [], cases: [], opportunities: [] };
     const objectTypes = this.getObjectTypesToSearch(params.objectTypes);
     
+    console.log(`🚀 Executing SOQL-only search for objects: ${objectTypes.join(', ')}`);
+    
     for (const objectType of objectTypes) {
       try {
+        console.log(`\n📊 Searching ${objectType}...`);
         const soqlQuery = this.buildSOQLQuery(objectType, params);
+        
+        console.log(`  ⚡ Executing SOQL query...`);
+        const startTime = Date.now();
         const response = await this.salesforceService.executeSOQLQuery(soqlQuery);
+        const endTime = Date.now();
+        
+        console.log(`  ✅ Query executed in ${endTime - startTime}ms`);
+        console.log(`  📊 Records returned: ${response.records ? response.records.length : 0}`);
+        
         results[`${objectType.toLowerCase()}s`] = response.records || [];
+        
+        if (response.records && response.records.length > 0) {
+          console.log(`  🎯 Sample results:`);
+          response.records.slice(0, 2).forEach((record, i) => {
+            const name = record.Name || record.CaseNumber || record.Subject || 'N/A';
+            console.log(`    ${i + 1}. ${name}`);
+          });
+        }
+        
       } catch (error) {
-        console.error(`Error searching ${objectType}:`, error.message);
+        console.error(`❌ Error searching ${objectType}:`, error.message);
+        console.error(`  Stack:`, error.stack);
       }
     }
     
@@ -290,14 +326,33 @@ Return ONLY JSON, no markdown.
 
   // Strategy 4: Default fallback
   async searchWithDefaultStrategy(params) {
+    console.log('🔄 Using default fallback strategy - searching recent cases');
+    
     // Default to searching cases with basic criteria
     const defaultQuery = `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name FROM Case ORDER BY CreatedDate DESC LIMIT 20`;
     
+    console.log(`  🔍 Default SOQL query: ${defaultQuery}`);
+    
     try {
+      console.log('  ⚡ Executing default query...');
+      const startTime = Date.now();
       const response = await this.salesforceService.executeSOQLQuery(defaultQuery);
+      const endTime = Date.now();
+      
+      console.log(`  ✅ Default query executed in ${endTime - startTime}ms`);
+      console.log(`  📊 Records returned: ${response.records ? response.records.length : 0}`);
+      
+      if (response.records && response.records.length > 0) {
+        console.log('  🎯 Sample results:');
+        response.records.slice(0, 3).forEach((record, i) => {
+          console.log(`    ${i + 1}. Case ${record.CaseNumber}: ${record.Subject} (${record.Status})`);
+        });
+      }
+      
       return { cases: response.records || [], accounts: [], contacts: [], opportunities: [] };
     } catch (error) {
-      console.error('Default search failed:', error.message);
+      console.error('❌ Default search failed:', error.message);
+      console.error('  Stack:', error.stack);
       return { accounts: [], contacts: [], cases: [], opportunities: [] };
     }
   }
@@ -340,29 +395,52 @@ Return ONLY JSON, no markdown.
     
     // Time-based filters
     if (params.timeRange && params.timeRange !== 'all_time') {
-      conditions.push(this.getTimeCondition(params.timeRange));
+      const timeCondition = this.getTimeCondition(params.timeRange);
+      conditions.push(timeCondition);
+      console.log(`  ⏰ Time filter: ${timeCondition}`);
     }
     
     // Object-specific filters
     switch (objectType) {
       case 'Opportunity':
-        conditions.push(...this.getOpportunityFilters(params));
+        const oppFilters = this.getOpportunityFilters(params);
+        conditions.push(...oppFilters);
+        if (oppFilters.length > 0) {
+          console.log(`  💰 Opportunity filters: ${oppFilters.join(', ')}`);
+        }
         break;
       case 'Case':
-        conditions.push(...this.getCaseFilters(params));
+        const caseFilters = this.getCaseFilters(params);
+        conditions.push(...caseFilters);
+        if (caseFilters.length > 0) {
+          console.log(`  🎫 Case filters: ${caseFilters.join(', ')}`);
+        }
         break;
       case 'Account':
-        conditions.push(...this.getAccountFilters(params));
+        const accFilters = this.getAccountFilters(params);
+        conditions.push(...accFilters);
+        if (accFilters.length > 0) {
+          console.log(`  🏢 Account filters: ${accFilters.join(', ')}`);
+        }
         break;
       case 'Contact':
-        conditions.push(...this.getContactFilters(params));
+        const conFilters = this.getContactFilters(params);
+        conditions.push(...conFilters);
+        if (conFilters.length > 0) {
+          console.log(`  👤 Contact filters: ${conFilters.join(', ')}`);
+        }
         break;
     }
     
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const fields = this.getFieldsForObject(objectType);
     
-    return `SELECT ${fields} FROM ${objectType} ${whereClause} ORDER BY CreatedDate DESC LIMIT 50`;
+    const finalQuery = `SELECT ${fields} FROM ${objectType} ${whereClause} ORDER BY CreatedDate DESC LIMIT 50`;
+    
+    console.log(`  🔍 Generated SOQL for ${objectType}:`);
+    console.log(`    ${finalQuery}`);
+    
+    return finalQuery;
   }
 
   // Helper: Get time condition for SOQL
@@ -509,6 +587,73 @@ Return ONLY JSON, no markdown.
     } else {
       return 'Default Fallback Search';
     }
+  }
+
+    // Helper: Parse natural language query into structured parameters
+  parseNaturalLanguageQuery(query) {
+    const lowerQuery = query.toLowerCase();
+    const params = {};
+    
+    // Extract object types
+    if (lowerQuery.includes('case') || lowerQuery.includes('support') || lowerQuery.includes('ticket')) {
+      params.objectTypes = ['Case'];
+    } else if (lowerQuery.includes('opportunity') || lowerQuery.includes('deal')) {
+      params.objectTypes = ['Opportunity'];
+    } else if (lowerQuery.includes('account') || lowerQuery.includes('company')) {
+      params.objectTypes = ['Account'];
+    } else if (lowerQuery.includes('contact') || lowerQuery.includes('person')) {
+      params.objectTypes = ['Contact'];
+    } else {
+      params.objectTypes = ['Case', 'Account', 'Opportunity', 'Contact']; // Default to all
+    }
+    
+    // Extract time ranges
+    if (lowerQuery.includes('last 30 days') || lowerQuery.includes('past month')) {
+      params.timeRange = 'last_30_days';
+    } else if (lowerQuery.includes('last 90 days') || lowerQuery.includes('past quarter')) {
+      params.timeRange = 'last_90_days';
+    } else if (lowerQuery.includes('this week')) {
+      params.timeRange = 'this_week';
+    } else if (lowerQuery.includes('this month')) {
+      params.timeRange = 'this_month';
+    } else if (lowerQuery.includes('today')) {
+      params.timeRange = 'today';
+    } else if (lowerQuery.includes('yesterday')) {
+      params.timeRange = 'yesterday';
+    } else {
+      params.timeRange = 'last_30_days'; // Default
+    }
+    
+    // Extract keywords (remove common words and extract meaningful terms)
+    const commonWords = ['get', 'find', 'show', 'me', 'all', 'the', 'with', 'in', 'on', 'at', 'to', 'for', 'of', 'a', 'an', 'and', 'or', 'but', 'recent', 'support', 'cases', 'opportunities', 'accounts', 'contacts', 'last', 'days', 'weeks', 'months', 'year'];
+    const words = query.toLowerCase().split(/\s+/).filter(word => 
+      word.length > 2 && !commonWords.includes(word) && !word.match(/^\d+$/)
+    );
+    params.keywords = words;
+    
+    // Extract specific filters
+    if (lowerQuery.includes('won')) {
+      params.opportunityStage = 'won';
+    } else if (lowerQuery.includes('lost')) {
+      params.opportunityStage = 'lost';
+    } else if (lowerQuery.includes('open')) {
+      params.caseStatus = 'open';
+    } else if (lowerQuery.includes('closed')) {
+      params.caseStatus = 'closed';
+    }
+    
+    // Extract amounts
+    const amountMatch = query.match(/\$?(\d+)[kK]/);
+    if (amountMatch) {
+      const amount = parseInt(amountMatch[1]) * 1000;
+      if (lowerQuery.includes('>') || lowerQuery.includes('more than') || lowerQuery.includes('at least')) {
+        params.minAmount = amount;
+      } else if (lowerQuery.includes('<') || lowerQuery.includes('less than') || lowerQuery.includes('under')) {
+        params.maxAmount = amount;
+      }
+    }
+    
+    return params;
   }
 
   // Helper: Perform deep analysis
