@@ -407,8 +407,18 @@ function formatToolResults(toolResults) {
     } else if (result.success) {
       responseText += `🔍 **${result.toolName}**: Found ${result.count} results\n`;
       
+      // Show executed queries for any tool that has them
+      if (result.executedQueries && result.executedQueries.length > 0) {
+        responseText += `📝 **Executed Queries:**\n`;
+        result.executedQueries.forEach((query, index) => {
+          responseText += `${index + 1}. \`${query}\`\n`;
+        });
+        responseText += '\n';
+      }
+      
       // Handle SOSL Discovery search results
       if (result.toolName === 'sosl_discovery_search' && result.data) {
+        
         // Show thinking process
         if (result.thinkingProcess) {
           responseText += `🧠 **AI Thinking Process:**\n`;
@@ -531,6 +541,22 @@ function formatToolResults(toolResults) {
         responseText += `📅 **Period:** ${result.timeframe}\n`;
         responseText += `📊 **Data Points:** ${result.dataPoints}\n\n`;
         responseText += `🤖 **Trend Analysis:**\n${result.aiAnalysis}\n`;
+      }
+      // Handle advanced opportunity search results
+      else if (result.toolName === 'advanced_opportunity_search' && result.data && result.data.length > 0) {
+        responseText += `💰 **Opportunities Found:**\n`;
+        result.data.slice(0, 5).forEach((opp, index) => {
+          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${opp.Id}`;
+          const amount = opp.Amount ? `$${Number(opp.Amount).toLocaleString()}` : 'No amount';
+          responseText += `${index + 1}. <${sfUrl}|${opp.Name}> - ${amount} (${opp.StageName})\n`;
+          if (opp.Account && opp.Account.Name) {
+            responseText += `   🏢 Account: ${opp.Account.Name}\n`;
+          }
+          if (opp.CloseDate) {
+            responseText += `   📅 Close Date: ${new Date(opp.CloseDate).toLocaleDateString()}\n`;
+          }
+        });
+        responseText += '\n';
       }
       // Handle single-object results
       else if (result.data && result.data.length > 0) {

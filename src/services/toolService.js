@@ -806,7 +806,8 @@ Provide insights on:
         cases: [],
         opportunities: [],
         searchStrategy: 'SOSL Discovery with Time Filtering and LLM Analysis',
-        thinkingSteps: []
+        thinkingSteps: [],
+        executedQueries: []
       };
 
       // Phase 1: SOSL Discovery
@@ -816,8 +817,16 @@ Provide insights on:
         try {
           const soslQuery = `FIND {${keyword}} RETURNING Account(Name, Id, Industry, CreatedDate), Contact(Name, Email, Id, CreatedDate), Case(CaseNumber, Subject, Status, Id, CreatedDate, Priority), Opportunity(Name, StageName, Amount, Id, CreatedDate, CloseDate)`;
           
+          // Add query to results for Slack display
+          allResults.executedQueries.push(`SOSL: ${soslQuery}`);
+          allResults.thinkingSteps.push(`🔍 Searching keyword: "${keyword}"`);
+          
           console.log(`🔍 SOSL Discovery for keyword: ${keyword}`);
           const response = await this.salesforceService.executeSOSLQuery(soslQuery);
+          
+          // Add response info to thinking steps
+          const recordCount = response.searchRecords ? response.searchRecords.length : 0;
+          allResults.thinkingSteps.push(`📊 Found ${recordCount} records for "${keyword}"`);
           
           if (response.searchRecords && response.searchRecords.length > 0) {
             response.searchRecords.forEach(record => {
@@ -924,7 +933,8 @@ Be specific and actionable.
           opportunities: allResults.opportunities.length
         },
         deepAnalysisPerformed: params.deepAnalysis === 'true',
-        thinkingProcess: allResults.thinkingSteps
+        thinkingProcess: allResults.thinkingSteps,
+        executedQueries: allResults.executedQueries
       };
 
     } catch (error) {
@@ -1051,6 +1061,7 @@ Provide detailed insights, patterns, and recommendations.
       
       let opportunityIds = [];
       let searchStrategy = '';
+      let executedQueries = [];
       
       // Phase 1: Keyword Discovery (if keywords provided)
       if (params.keywords && params.keywords.length > 0) {
@@ -1060,6 +1071,9 @@ Provide detailed insights, patterns, and recommendations.
           try {
             const soslQuery = `FIND {${keyword}} RETURNING Opportunity(Id, Name, StageName, Amount, CloseDate, Account.Name)`;
             console.log(`🔍 SOSL for keyword: ${keyword}`);
+            
+            // Add query to results for display
+            executedQueries.push(`SOSL: ${soslQuery}`);
             
             const response = await this.salesforceService.executeSOSLQuery(soslQuery);
             if (response.searchRecords && response.searchRecords.length > 0) {
@@ -1137,6 +1151,9 @@ Provide detailed insights, patterns, and recommendations.
       
       console.log('📊 Final SOQL Query:', soqlQuery);
       
+      // Add final SOQL query to results for display
+      executedQueries.push(`SOQL: ${soqlQuery.replace(/\s+/g, ' ').trim()}`);
+      
       const response = await this.salesforceService.executeSOQLQuery(soqlQuery);
       
       return {
@@ -1146,6 +1163,7 @@ Provide detailed insights, patterns, and recommendations.
         count: response.totalSize || 0,
         searchStrategy,
         query: soqlQuery,
+        executedQueries,
         filters: {
           keywords: params.keywords,
           minAmount: params.minAmount,
