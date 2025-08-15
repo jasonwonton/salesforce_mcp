@@ -574,6 +574,14 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
       thread_ts: body.message.ts
     });
     
+    // Store thread context for follow-up questions
+    global.activeThreads = global.activeThreads || {};
+    global.activeThreads[body.message.ts] = {
+      userRequest: pendingPlan.userPrompt,
+      toolResults,
+      timestamp: Date.now()
+    };
+    
     // Send AI analysis placeholder
     setTimeout(async () => {
       await client.chat.postMessage({
