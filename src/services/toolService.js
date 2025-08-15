@@ -176,24 +176,32 @@ Return ONLY JSON, no markdown.
         console.log('✅ Parsed parameters:', JSON.stringify(parsedParams, null, 2));
       }
       
-      // Use LLM to determine if we have meaningful keywords
-      const hasSearchableKeywords = await this.hasSearchableKeywordsLLM(parsedParams, params.query || '');
-      console.log('🧠 LLM keyword analysis:', hasSearchableKeywords);
+      // Use LLM to determine search strategy
+      const searchStrategy = await this.hasSearchableKeywordsLLM(parsedParams, params.query || '');
+      console.log('🧠 LLM search strategy:', searchStrategy);
+      
+      // Override object types with LLM decision
+      const finalParams = { 
+        ...parsedParams, 
+        objectTypes: searchStrategy.objectTypes 
+      };
       
       let searchResults = {};
       let strategy = '';
       
-      if (hasSearchableKeywords.hasKeywords) {
+      if (searchStrategy.hasKeywords) {
         // Strategy 1: SOSL discovery → SOQL filtering
         console.log('🔍 Using SOSL → SOQL strategy');
-        console.log('📝 Short keywords for SOSL:', hasSearchableKeywords.shortKeywords);
+        console.log('📝 Short keywords for SOSL:', searchStrategy.shortKeywords);
+        console.log('🎯 Target objects:', searchStrategy.objectTypes);
         strategy = 'SOSL Discovery + SOQL Filtering';
-        searchResults = await this.searchSOSLThenSOQL(parsedParams, hasSearchableKeywords.shortKeywords);
+        searchResults = await this.searchSOSLThenSOQL(finalParams, searchStrategy.shortKeywords);
       } else {
         // Strategy 2: Direct SOQL with all filters
         console.log('📊 Using direct SOQL strategy (no searchable keywords)');
+        console.log('🎯 Target objects:', searchStrategy.objectTypes);
         strategy = 'Direct SOQL with Filters';
-        searchResults = await this.searchWithSOQLOnly(parsedParams);
+        searchResults = await this.searchWithSOQLOnly(finalParams);
       }
 
       // Deep analysis if requested
@@ -224,28 +232,36 @@ Return ONLY JSON, no markdown.
   // Use LLM to determine if query has searchable keywords and extract short ones
   async hasSearchableKeywordsLLM(params, originalQuery) {
     const prompt = `
-Analyze this search query for meaningful searchable keywords:
+Analyze this search query and determine the search strategy:
 
 Original Query: "${originalQuery}"
 Parsed Keywords: ${JSON.stringify(params.keywords || [], null, 2)}
 
 Determine:
-1. Are there any actual searchable keywords (company names, product names, people names, specific terms)?
-2. Extract the SHORTEST, most essential keywords for SOSL search (max 2-3 words total)
+1. Which Salesforce objects to search: Case, Account, Opportunity, Contact
+2. Are there any actual searchable keywords (company names, product names, people names, specific terms)?
+3. Extract the SHORTEST, most essential keywords for SOSL search (max 2-3 words total)
+
+Context clues:
+- "cases", "support", "tickets" → Case object
+- "opportunities", "deals", "won", "lost", "closed" → Opportunity object  
+- "accounts", "companies" → Account object
+- "contacts", "people" → Contact object
 
 Ignore filter words like: open, closed, won, lost, high, medium, low, recent, last, days, etc.
 
 Examples:
-- "recent support cases" → No searchable keywords
-- "United Oil Gas issues" → Yes, keywords: ["United Oil"]  
-- "Acme Corp billing problems last month" → Yes, keywords: ["Acme Corp"]
-- "high priority cases from Singapore office" → Yes, keywords: ["Singapore"]
+- "recent support cases" → Objects: ["Case"], No searchable keywords
+- "won opportunities" → Objects: ["Opportunity"], No searchable keywords
+- "United Oil Gas issues" → Objects: ["Case"], Keywords: ["United Oil"]  
+- "Acme Corp opportunities" → Objects: ["Opportunity"], Keywords: ["Acme Corp"]
 
 Return JSON:
 {
+  "objectTypes": ["Case"] or ["Opportunity"] or ["Account"] or ["Contact"],
   "hasKeywords": boolean,
   "shortKeywords": ["word1", "word2"], 
-  "reasoning": "why these are/aren't searchable"
+  "reasoning": "why these objects and keywords were selected"
 }
     `;
 
