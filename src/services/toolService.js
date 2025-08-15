@@ -247,12 +247,14 @@ Determine:
 3. Extract the SHORTEST, most essential keywords for SOSL search (max 2-3 words total)
 
 Context clues for object selection:
-- "cases", "support", "tickets" → Case object
-- "opportunities", "deals", "won", "lost", "closed" → Opportunity object  
-- "accounts", "companies" → Account object
-- "contacts", "people" → Contact object
-- Company names (like "Acme Corp", "United Oil") → Search Case, Account, Opportunity, Contact
-- Generic searches → Search Case, Account, Opportunity, Contact
+- "cases", "support cases", "support tickets", "tickets" → Case object ONLY
+- "opportunities", "deals", "won", "lost", "closed" → Opportunity object ONLY  
+- "accounts", "companies" → Account object ONLY
+- "contacts", "people" → Contact object ONLY
+- Company names WITHOUT object type specified (like "Acme Corp data") → Search all objects
+- Generic searches without specific object type → Search all objects
+
+IMPORTANT: If the user specifically mentions "support cases", "cases", or "tickets", ONLY search the Case object.
 
 Ignore ONLY status/filter words like: open, closed, won, lost, high, medium, low, recent, last, days, etc.
 
@@ -260,12 +262,13 @@ DO search for business/industry terms like: oil, gas, energy, technology, health
 
 Examples:
 - "recent support cases" → Objects: ["Case"], No searchable keywords
+- "support cases with United Oil" → Objects: ["Case"], Keywords: ["United Oil"]
 - "won opportunities" → Objects: ["Opportunity"], No searchable keywords  
 - "oil and gas accounts" → Objects: ["Account"], Keywords: ["oil", "gas"]
-- "United Oil Gas issues" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["United Oil", "gas"]  
+- "United Oil Gas issues" → Objects: ["Case"], Keywords: ["United Oil", "gas"] (issues = support cases)
+- "United Oil Gas data" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["United Oil", "gas"] (generic data = all objects)
 - "Acme Corp" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["Acme Corp"]
 - "technology companies" → Objects: ["Account"], Keywords: ["technology"]
-- "all data" → Objects: ["Case", "Account", "Opportunity", "Contact"], No searchable keywords
 
 Return JSON:
 {
