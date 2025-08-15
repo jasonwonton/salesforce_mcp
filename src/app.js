@@ -226,6 +226,7 @@ slackApp.command('/station', async ({ command, ack, respond, context, client }) 
       refinementRequest: existingPlan ? userPrompt : null,
       toolPlan,
       team,
+      channelId: command.channel_id,
       timestamp: Date.now()
     };
     
@@ -253,10 +254,9 @@ slackApp.command('/station', async ({ command, ack, respond, context, client }) 
     console.log('Sending plan with buttons for planKey:', planKey);
     
     try {
-      await client.chat.postMessage({
-        channel: command.channel_id,
+      await respond({
         text: planText,
-        thread_ts: command.ts,
+        response_type: "in_channel",
         blocks: [
           {
             type: "section",
@@ -304,10 +304,9 @@ slackApp.command('/station', async ({ command, ack, respond, context, client }) 
     } catch (blockError) {
       console.error('Failed to send blocks, falling back to text:', blockError);
       // Fallback without blocks if interactive components not configured
-      await client.chat.postMessage({
-        channel: command.channel_id,
+      await respond({
         text: planText + `\n\n**Interactive buttons not available.** Type \`/station approve\` to execute this plan.`,
-        thread_ts: command.ts
+        response_type: "in_channel"
       });
     }
     
@@ -438,7 +437,7 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
 
   // Execute the approved plan
   await client.chat.postMessage({
-    channel: body.channel.id,
+    channel: pendingPlan.channelId,
     text: "✅ **Plan approved!** Executing tools...",
     thread_ts: body.message.ts
   });
@@ -454,7 +453,7 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
       
       // Show current tool execution
       await client.chat.postMessage({
-        channel: body.channel.id,
+        channel: pendingPlan.channelId,
         text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
         thread_ts: body.message.ts
       });
@@ -465,7 +464,7 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
       // Show completion
       const status = result.success ? "✅" : "❌";
       await client.chat.postMessage({
-        channel: body.channel.id,
+        channel: pendingPlan.channelId,
         text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
         thread_ts: body.message.ts
       });
