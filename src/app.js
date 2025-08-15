@@ -428,7 +428,7 @@ function formatToolResults(toolResults) {
       // Show opportunities
       if (data.opportunities && data.opportunities.length > 0) {
         responseText += `💰 **Opportunities (${data.opportunities.length}):**\n`;
-        data.opportunities.slice(0, 5).forEach((opp, index) => {
+        data.opportunities.forEach((opp, index) => {
           const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${opp.Id}`;
           const amount = opp.Amount ? `$${Number(opp.Amount).toLocaleString()}` : 'No amount';
           responseText += `${index + 1}. <${sfUrl}|${opp.Name}>: ${amount} (${opp.StageName || 'Unknown Stage'})\n`;
@@ -439,7 +439,7 @@ function formatToolResults(toolResults) {
       // Show accounts
       if (data.accounts && data.accounts.length > 0) {
         responseText += `🏢 **Accounts (${data.accounts.length}):**\n`;
-        data.accounts.slice(0, 5).forEach((account, index) => {
+        data.accounts.forEach((account, index) => {
           const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${account.Id}`;
           responseText += `${index + 1}. <${sfUrl}|${account.Name}> (${account.Industry || 'Unknown Industry'})\n`;
         });
@@ -449,7 +449,7 @@ function formatToolResults(toolResults) {
       // Show contacts
       if (data.contacts && data.contacts.length > 0) {
         responseText += `👤 **Contacts (${data.contacts.length}):**\n`;
-        data.contacts.slice(0, 5).forEach((contact, index) => {
+        data.contacts.forEach((contact, index) => {
           const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${contact.Id}`;
           responseText += `${index + 1}. <${sfUrl}|${contact.Name}> (${contact.Email || 'No email'})\n`;
         });

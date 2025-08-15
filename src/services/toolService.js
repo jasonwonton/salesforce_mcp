@@ -242,23 +242,26 @@ Determine:
 2. Are there any actual searchable keywords (company names, product names, people names, specific terms)?
 3. Extract the SHORTEST, most essential keywords for SOSL search (max 2-3 words total)
 
-Context clues:
+Context clues for object selection:
 - "cases", "support", "tickets" → Case object
 - "opportunities", "deals", "won", "lost", "closed" → Opportunity object  
 - "accounts", "companies" → Account object
 - "contacts", "people" → Contact object
+- Company names (like "Acme Corp", "United Oil") → Search Case, Account, Opportunity, Contact
+- Generic searches → Search Case, Account, Opportunity, Contact
 
 Ignore filter words like: open, closed, won, lost, high, medium, low, recent, last, days, etc.
 
 Examples:
 - "recent support cases" → Objects: ["Case"], No searchable keywords
 - "won opportunities" → Objects: ["Opportunity"], No searchable keywords
-- "United Oil Gas issues" → Objects: ["Case"], Keywords: ["United Oil"]  
-- "Acme Corp opportunities" → Objects: ["Opportunity"], Keywords: ["Acme Corp"]
+- "United Oil Gas issues" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["United Oil"]  
+- "Acme Corp" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["Acme Corp"]
+- "all data" → Objects: ["Case", "Account", "Opportunity", "Contact"], No searchable keywords
 
 Return JSON:
 {
-  "objectTypes": ["Case"] or ["Opportunity"] or ["Account"] or ["Contact"],
+  "objectTypes": ["Case"] or ["Opportunity"] or ["Account"] or ["Contact"] or ["Case", "Account", "Opportunity", "Contact"],
   "hasKeywords": boolean,
   "shortKeywords": ["word1", "word2"], 
   "reasoning": "why these objects and keywords were selected"
@@ -291,20 +294,29 @@ Return JSON:
     
     for (const objectType of objectTypes) {
       try {
-        // Step 1: SOSL to find records with keywords
-        const keywordString = this.sanitizeKeywords(shortKeywords).join(' ');
-        const soslQuery = `FIND {${keywordString}} RETURNING ${objectType}(Id)`;
+        // Step 1: SOSL to find records with keywords (search each keyword individually)
+        let allFoundIds = new Set();
         
-        console.log(`  🔍 SOSL for ${objectType}: ${soslQuery}`);
-        const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+        for (const keyword of this.sanitizeKeywords(shortKeywords)) {
+          const soslQuery = `FIND {${keyword}} RETURNING ${objectType}(Id)`;
+          
+          console.log(`  🔍 SOSL for ${objectType} with keyword "${keyword}": ${soslQuery}`);
+          const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+          
+          const foundIds = soslResult.searchRecords ? soslResult.searchRecords.map(r => r.Id) : [];
+          console.log(`  📊 SOSL found ${foundIds.length} ${objectType} records for "${keyword}"`);
+          
+          // Add to combined results
+          foundIds.forEach(id => allFoundIds.add(id));
+        }
         
-        const foundIds = soslResult.searchRecords ? soslResult.searchRecords.map(r => r.Id) : [];
-        console.log(`  📊 SOSL found ${foundIds.length} ${objectType} records`);
+        const combinedIds = Array.from(allFoundIds);
+        console.log(`  🎯 Combined SOSL results: ${combinedIds.length} unique ${objectType} records`);
         
-        if (foundIds.length > 0) {
+        if (combinedIds.length > 0) {
           // Step 2: SOQL to filter and enrich with full data
           console.log(`  🔍 Step 2: SOQL filtering for ${objectType}...`);
-          const filteredRecords = await this.filterRecordsWithSOQL(objectType, foundIds, params);
+          const filteredRecords = await this.filterRecordsWithSOQL(objectType, combinedIds, params);
           results[`${objectType.toLowerCase()}s`] = filteredRecords;
           console.log(`  ✅ Final ${objectType} results: ${filteredRecords.length} records`);
         }
