@@ -380,6 +380,8 @@ function getToolDescription(toolName) {
   const descriptions = {
     'search_recent_cases': 'Search recent Salesforce cases',
     'search_cases_by_keywords': 'Search cases by specific keywords',
+    'sosl_discovery_search': 'SOSL discovery with time filtering and deep AI analysis',
+    'deep_record_analysis': 'Deep analysis of specific records with full context',
     'search_all_objects': 'Search across all Salesforce objects',
     'search_accounts': 'Search for Salesforce accounts',
     'get_account_health': 'Find accounts with health issues',
@@ -388,6 +390,7 @@ function getToolDescription(toolName) {
     'analyze_case_details': 'Deep analysis of specific case',
     'analyze_account_health': 'Deep dive into account health',
     'analyze_pattern_trends': 'AI analysis of patterns and trends',
+    'thinking_update': 'Show AI thinking process',
     'conversational_response': 'Provide helpful guidance'
   };
   return descriptions[toolName] || 'Execute tool';
@@ -404,8 +407,62 @@ function formatToolResults(toolResults) {
     } else if (result.success) {
       responseText += `🔍 **${result.toolName}**: Found ${result.count} results\n`;
       
-      // Handle multi-object search results
-      if (result.toolName === 'search_all_objects' && result.data) {
+      // Handle SOSL Discovery search results
+      if (result.toolName === 'sosl_discovery_search' && result.data) {
+        // Show thinking process
+        if (result.thinkingProcess) {
+          responseText += `🧠 **AI Thinking Process:**\n`;
+          result.thinkingProcess.forEach(step => {
+            responseText += `${step}\n`;
+          });
+          responseText += '\n';
+        }
+        
+        if (result.breakdown) {
+          responseText += `📊 **Discovery Results:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
+        }
+        
+        // Show cases with Salesforce links
+        if (result.data.cases && result.data.cases.length > 0) {
+          responseText += `📋 **Cases Found:**\n`;
+          result.data.cases.slice(0, 5).forEach((case_, index) => {
+            // Construct Salesforce URL (you'll need to update with your org's URL)
+            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${case_.Id}`;
+            responseText += `${index + 1}. <${sfUrl}|${case_.CaseNumber}>: ${case_.Subject} (${case_.Status})\n`;
+            if (case_.CreatedDate) {
+              responseText += `   📅 Created: ${new Date(case_.CreatedDate).toLocaleDateString()}\n`;
+            }
+            if (case_.Priority) {
+              responseText += `   🔥 Priority: ${case_.Priority}\n`;
+            }
+          });
+          responseText += '\n';
+        }
+        
+        // Show accounts with links
+        if (result.data.accounts && result.data.accounts.length > 0) {
+          responseText += `🏢 **Accounts Found:**\n`;
+          result.data.accounts.slice(0, 3).forEach((account, index) => {
+            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${account.Id}`;
+            responseText += `${index + 1}. <${sfUrl}|${account.Name}> (${account.Industry || 'Unknown Industry'})\n`;
+          });
+          responseText += '\n';
+        }
+        
+        // Show deep analysis if performed
+        if (result.data.deepAnalysis) {
+          responseText += `🧠 **AI Deep Analysis:**\n${result.data.deepAnalysis}\n\n`;
+        }
+        
+        // Add research prompt
+        if (result.data.cases && result.data.cases.length > 0) {
+          const firstCase = result.data.cases[0];
+          responseText += `🔍 **Want to research specific cases?**\n`;
+          responseText += `Type: \`/station analyze case ${firstCase.CaseNumber || firstCase.Id}\`\n\n`;
+        }
+      }
+      // Handle multi-object search results (legacy)
+      else if (result.toolName === 'search_all_objects' && result.data) {
         if (result.breakdown) {
           responseText += `📊 **Breakdown:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
         }
@@ -434,7 +491,28 @@ function formatToolResults(toolResults) {
           });
         }
       } 
-      // Handle deep analysis results
+      // Handle deep record analysis results
+      else if (result.toolName === 'deep_record_analysis') {
+        responseText += `🕵️ **Deep Analysis of ${result.recordType}:**\n\n`;
+        
+        if (result.recordType === 'Case' && result.record) {
+          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${result.record.Id}`;
+          responseText += `📋 **Case:** <${sfUrl}|${result.record.CaseNumber}> - ${result.record.Subject}\n`;
+          responseText += `🏢 **Account:** ${result.record.Account?.Name}\n`;
+          responseText += `📊 **Status:** ${result.record.Status} | **Priority:** ${result.record.Priority}\n`;
+          responseText += `📅 **Created:** ${new Date(result.record.CreatedDate).toLocaleDateString()}\n`;
+          responseText += `📊 **Related Cases:** ${result.relatedRecords}\n\n`;
+        }
+        
+        if (result.aiAnalysis) {
+          responseText += `🧠 **AI ${result.analysisType} Analysis:**\n${result.aiAnalysis}\n\n`;
+        }
+        
+        responseText += `🔍 **Want to research more?** Try:\n`;
+        responseText += `• \`/station billing issues last 30 days\` - Find similar cases\n`;
+        responseText += `• \`/station analyze account ${result.record?.Account?.Name || 'ACCOUNT_NAME'}\` - Account health\n`;
+      }
+      // Handle deep analysis results (legacy)
       else if (result.analysis === 'deep') {
         if (result.toolName === 'analyze_case_details') {
           responseText += `📋 **Case:** ${result.caseData.CaseNumber} - ${result.caseData.Subject}\n`;

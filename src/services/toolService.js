@@ -55,21 +55,28 @@ class ToolService {
         // Example query: SELECT Id, Name, Type, Industry, Phone FROM Account WHERE Name LIKE '%Acme%' LIMIT 10
       },
       {
-        name: 'get_account_health',
-        description: 'Find accounts with health issues or high case volume',
+        name: 'advanced_account_search',
+        description: 'Advanced account search with keyword filtering and health analysis',
         parameters: {
-          riskLevel: 'high|medium|low'
+          keywords: 'array of search terms (optional)',
+          healthFilter: 'red|yellow|green|all (optional)',
+          includeContacts: 'true|false - include related contacts',
+          analysisDepth: 'basic|full - level of analysis to perform'
         },
-        // Example query: SELECT Account.Id, Account.Name, COUNT(Id) as CaseCount FROM Case WHERE Priority IN ('High', 'Critical') AND CreatedDate = LAST_30_DAYS GROUP BY Account.Id, Account.Name ORDER BY COUNT(Id) DESC LIMIT 15
+        // Combines SOSL keyword search with account health analysis
       },
       {
-        name: 'search_opportunities',
-        description: 'Search deals/opportunities in Salesforce',
+        name: 'advanced_opportunity_search',
+        description: 'Advanced opportunity search with keyword + structured filtering (amount, stage, etc.)',
         parameters: {
-          searchTerm: 'opportunity or account name',
-          stage: 'won|lost|open (optional)'
+          keywords: 'array of search terms (optional)',
+          minAmount: 'minimum amount filter (optional)',
+          maxAmount: 'maximum amount filter (optional)', 
+          stage: 'Won|Lost|Closed|Open|Negotiation (optional)',
+          timeframe: 'last_30_days|last_90_days|all_time (optional)',
+          searchMethod: 'sosl_then_filter|soql_only - determines search strategy'
         },
-        // Example query: SELECT Id, Name, StageName, Amount, Account.Name FROM Opportunity WHERE (Name LIKE '%Microsoft%' OR Account.Name LIKE '%Microsoft%') LIMIT 10
+        // Combines SOSL keyword discovery with SOQL structured filtering
       },
       {
         name: 'search_jira_issues',
@@ -258,6 +265,10 @@ Return ONLY JSON, no markdown.
         return await this.getAccountHealth(parameters);
       case 'search_opportunities':
         return await this.searchOpportunities(parameters);
+      case 'advanced_opportunity_search':
+        return await this.advancedOpportunitySearch(parameters);
+      case 'advanced_account_search':
+        return await this.advancedAccountSearch(parameters);
       case 'search_jira_issues':
         return await this.searchJiraIssues(parameters);
       case 'deep_record_analysis':
@@ -1027,6 +1038,246 @@ Provide detailed insights, patterns, and recommendations.
       progress: params.progress || null,
       isThinking: true
     };
+  }
+
+  // Advanced Opportunity Search - SOSL + SOQL combination
+  async advancedOpportunitySearch(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      console.log('🎯 Advanced Opportunity Search starting:', params);
+      
+      let opportunityIds = [];
+      let searchStrategy = '';
+      
+      // Phase 1: Keyword Discovery (if keywords provided)
+      if (params.keywords && params.keywords.length > 0) {
+        searchStrategy = 'SOSL keyword discovery + SOQL filtering';
+        
+        for (const keyword of params.keywords.slice(0, 3)) {
+          try {
+            const soslQuery = `FIND {${keyword}} RETURNING Opportunity(Id, Name, StageName, Amount, CloseDate, Account.Name)`;
+            console.log(`🔍 SOSL for keyword: ${keyword}`);
+            
+            const response = await this.salesforceService.executeSOSLQuery(soslQuery);
+            if (response.searchRecords && response.searchRecords.length > 0) {
+              response.searchRecords.forEach(record => {
+                if (record.attributes.type === 'Opportunity' && !opportunityIds.includes(record.Id)) {
+                  opportunityIds.push(record.Id);
+                }
+              });
+            }
+          } catch (error) {
+            console.error(`SOSL failed for keyword "${keyword}":`, error.message);
+          }
+        }
+      }
+      
+      // Phase 2: Build SOQL Filter
+      let conditions = [];
+      
+      // Keyword filter (if we found IDs via SOSL)
+      if (opportunityIds.length > 0) {
+        conditions.push(`Id IN ('${opportunityIds.join("','")}')`);
+      } else if (params.keywords && params.keywords.length > 0) {
+        // Fallback to SOQL LIKE if SOSL failed
+        const keywordConditions = params.keywords.map(keyword => 
+          `(Name LIKE '%${keyword}%' OR Description LIKE '%${keyword}%')`
+        );
+        conditions.push(`(${keywordConditions.join(' OR ')})`);
+        searchStrategy = 'SOQL keyword + structured filtering';
+      } else {
+        searchStrategy = 'Pure SOQL structured filtering';
+      }
+      
+      // Amount filters
+      if (params.minAmount) {
+        conditions.push(`Amount >= ${params.minAmount}`);
+      }
+      if (params.maxAmount) {
+        conditions.push(`Amount <= ${params.maxAmount}`);
+      }
+      
+      // Stage filters
+      if (params.stage) {
+        if (params.stage === 'Won') {
+          conditions.push('IsWon = true');
+        } else if (params.stage === 'Lost') {
+          conditions.push('IsWon = false AND IsClosed = true');
+        } else if (params.stage === 'Closed') {
+          conditions.push('IsClosed = true');
+        } else if (params.stage === 'Open') {
+          conditions.push('IsClosed = false');
+        } else {
+          conditions.push(`StageName = '${params.stage}'`);
+        }
+      }
+      
+      // Time filters
+      if (params.timeframe) {
+        if (params.timeframe === 'last_30_days') {
+          conditions.push('CreatedDate = LAST_N_DAYS:30');
+        } else if (params.timeframe === 'last_90_days') {
+          conditions.push('CreatedDate = LAST_N_DAYS:90');
+        }
+      }
+      
+      // Build final query
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const soqlQuery = `
+        SELECT Id, Name, StageName, Amount, CloseDate, CreatedDate, 
+               Account.Name, Account.Id, Type, LeadSource, Probability
+        FROM Opportunity 
+        ${whereClause}
+        ORDER BY Amount DESC NULLS LAST, CreatedDate DESC 
+        LIMIT 25
+      `;
+      
+      console.log('📊 Final SOQL Query:', soqlQuery);
+      
+      const response = await this.salesforceService.executeSOQLQuery(soqlQuery);
+      
+      return {
+        toolName: 'advanced_opportunity_search',
+        success: true,
+        data: response.records || [],
+        count: response.totalSize || 0,
+        searchStrategy,
+        query: soqlQuery,
+        filters: {
+          keywords: params.keywords,
+          minAmount: params.minAmount,
+          maxAmount: params.maxAmount,
+          stage: params.stage,
+          timeframe: params.timeframe
+        }
+      };
+      
+    } catch (error) {
+      return { toolName: 'advanced_opportunity_search', success: false, error: error.message };
+    }
+  }
+
+  // Advanced Account Search with Health Analysis
+  async advancedAccountSearch(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      console.log('🏢 Advanced Account Search starting:', params);
+      
+      let accountIds = [];
+      let searchStrategy = '';
+      
+      // Phase 1: Keyword Discovery (if keywords provided)
+      if (params.keywords && params.keywords.length > 0) {
+        searchStrategy = 'SOSL keyword discovery + health analysis';
+        
+        for (const keyword of params.keywords.slice(0, 3)) {
+          try {
+            const soslQuery = `FIND {${keyword}} RETURNING Account(Id, Name, Industry, Type)`;
+            console.log(`🔍 SOSL for keyword: ${keyword}`);
+            
+            const response = await this.salesforceService.executeSOSLQuery(soslQuery);
+            if (response.searchRecords && response.searchRecords.length > 0) {
+              response.searchRecords.forEach(record => {
+                if (record.attributes.type === 'Account' && !accountIds.includes(record.Id)) {
+                  accountIds.push(record.Id);
+                }
+              });
+            }
+          } catch (error) {
+            console.error(`SOSL failed for keyword "${keyword}":`, error.message);
+          }
+        }
+      }
+      
+      // Phase 2: Get Account Details
+      let conditions = [];
+      if (accountIds.length > 0) {
+        conditions.push(`Id IN ('${accountIds.join("','")}')`);
+      } else if (params.keywords && params.keywords.length > 0) {
+        const keywordConditions = params.keywords.map(keyword => 
+          `Name LIKE '%${keyword}%'`
+        );
+        conditions.push(`(${keywordConditions.join(' OR ')})`);
+        searchStrategy = 'SOQL keyword search + health analysis';
+      } else {
+        searchStrategy = 'All accounts health analysis';
+      }
+      
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const accountQuery = `
+        SELECT Id, Name, Type, Industry, AnnualRevenue, NumberOfEmployees,
+               BillingCity, BillingState, Phone, Website, CreatedDate
+        FROM Account 
+        ${whereClause}
+        ORDER BY Name 
+        LIMIT 20
+      `;
+      
+      const accountResponse = await this.salesforceService.executeSOQLQuery(accountQuery);
+      const accounts = accountResponse.records || [];
+      
+      // Phase 3: Health Analysis (if requested)
+      let healthData = [];
+      if (params.analysisDepth === 'full' && accounts.length > 0) {
+        const accountIdList = accounts.map(a => a.Id);
+        const healthQuery = `
+          SELECT AccountId, Account.Name, COUNT(Id) as CaseCount,
+                 SUM(CASE WHEN Priority = 'High' THEN 1 ELSE 0 END) as HighPriorityCases,
+                 MAX(CreatedDate) as LastCaseDate
+          FROM Case 
+          WHERE AccountId IN ('${accountIdList.join("','")}')
+          AND CreatedDate = LAST_N_DAYS:90
+          GROUP BY AccountId, Account.Name
+          ORDER BY CaseCount DESC
+        `;
+        
+        const healthResponse = await this.salesforceService.executeSOQLQuery(healthQuery);
+        healthData = healthResponse.records || [];
+      }
+      
+      // Phase 4: Include Contacts (if requested)
+      let contactData = [];
+      if (params.includeContacts === 'true' && accounts.length > 0) {
+        const accountIdList = accounts.map(a => a.Id);
+        const contactQuery = `
+          SELECT Id, Name, Email, Phone, Title, AccountId, Account.Name
+          FROM Contact 
+          WHERE AccountId IN ('${accountIdList.join("','")}')
+          ORDER BY Account.Name, Name
+          LIMIT 50
+        `;
+        
+        const contactResponse = await this.salesforceService.executeSOQLQuery(contactQuery);
+        contactData = contactResponse.records || [];
+      }
+      
+      return {
+        toolName: 'advanced_account_search',
+        success: true,
+        data: {
+          accounts,
+          healthData,
+          contactData
+        },
+        count: accounts.length,
+        searchStrategy,
+        filters: {
+          keywords: params.keywords,
+          healthFilter: params.healthFilter,
+          includeContacts: params.includeContacts,
+          analysisDepth: params.analysisDepth
+        }
+      };
+      
+    } catch (error) {
+      return { toolName: 'advanced_account_search', success: false, error: error.message };
+    }
   }
 
   async conversationalResponse(params) {
