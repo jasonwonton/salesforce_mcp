@@ -250,13 +250,17 @@ Context clues for object selection:
 - Company names (like "Acme Corp", "United Oil") → Search Case, Account, Opportunity, Contact
 - Generic searches → Search Case, Account, Opportunity, Contact
 
-Ignore filter words like: open, closed, won, lost, high, medium, low, recent, last, days, etc.
+Ignore ONLY status/filter words like: open, closed, won, lost, high, medium, low, recent, last, days, etc.
+
+DO search for business/industry terms like: oil, gas, energy, technology, healthcare, manufacturing, etc.
 
 Examples:
 - "recent support cases" → Objects: ["Case"], No searchable keywords
-- "won opportunities" → Objects: ["Opportunity"], No searchable keywords
-- "United Oil Gas issues" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["United Oil"]  
+- "won opportunities" → Objects: ["Opportunity"], No searchable keywords  
+- "oil and gas accounts" → Objects: ["Account"], Keywords: ["oil", "gas"]
+- "United Oil Gas issues" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["United Oil", "gas"]  
 - "Acme Corp" → Objects: ["Case", "Account", "Opportunity", "Contact"], Keywords: ["Acme Corp"]
+- "technology companies" → Objects: ["Account"], Keywords: ["technology"]
 - "all data" → Objects: ["Case", "Account", "Opportunity", "Contact"], No searchable keywords
 
 Return JSON:
