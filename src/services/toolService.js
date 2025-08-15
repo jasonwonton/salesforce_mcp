@@ -1278,7 +1278,8 @@ Provide detailed insights, patterns, and recommendations.
         // Phase 1: SOSL Discovery
         const discoveredIds = [];
         for (const keyword of params.keywords.slice(0, 3)) {
-          const soslQuery = `FIND {${keyword}} RETURNING ${params.object}(Id)`;
+          const sanitizedKeyword = this.sanitizeSOSLKeyword(keyword);
+          const soslQuery = `FIND {${sanitizedKeyword}} RETURNING ${params.object}(Id)`;
           executedQueries.push(`SOSL: ${soslQuery}`);
           
           const response = await this.salesforceService.executeSOSLQuery(soslQuery);
@@ -1386,7 +1387,8 @@ Provide detailed insights, patterns, and recommendations.
       });
 
       for (const keyword of params.keywords.slice(0, 3)) {
-        const soslQuery = `FIND {${keyword}} RETURNING ${soslParts.join(', ')}`;
+        const sanitizedKeyword = this.sanitizeSOSLKeyword(keyword);
+        const soslQuery = `FIND {${sanitizedKeyword}} RETURNING ${soslParts.join(', ')}`;
         executedQueries.push(`SOSL: ${soslQuery}`);
         
         const response = await this.salesforceService.executeSOSLQuery(soslQuery);
@@ -1596,6 +1598,18 @@ Identify relationships, patterns, and insights across these objects.
     } catch (error) {
       return 'Cross-object analysis failed but individual results are available';
     }
+  }
+
+  // Helper method to sanitize keywords for SOSL queries
+  sanitizeSOSLKeyword(keyword) {
+    // For phrases with &, split them into individual words
+    // "United Oil & Gas" → search for "United Oil Gas" (removes &)
+    // This way we search for the meaningful words without SOSL syntax errors
+    return keyword
+      .replace(/[&%*?~]/g, '')        // Remove special chars that break SOSL
+      .replace(/[^\w\s]/g, ' ')       // Replace other special chars with spaces
+      .replace(/\s+/g, ' ')           // Normalize multiple spaces
+      .trim();
   }
 }
 
