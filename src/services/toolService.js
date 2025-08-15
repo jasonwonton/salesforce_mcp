@@ -12,45 +12,25 @@ class ToolService {
   getAvailableTools() {
     return [
       {
-        name: 'search_records',
-        description: 'Search any Salesforce object with keywords and filters. Supports keyword discovery via SOSL and structured filtering via SOQL.',
+        name: 'search_salesforce',
+        description: 'Search Salesforce for any data - cases, accounts, opportunities, contacts. Handles keywords, filters, and time ranges automatically.',
         parameters: {
-          object: 'Case|Account|Opportunity|Contact - which Salesforce object to search',
-          keywords: 'array of search terms for keyword discovery (optional)',
-          timeframe: 'last_30_days|last_90_days|last_6_months|all_time (optional)',
-          minAmount: 'minimum amount filter for opportunities (optional)',
-          maxAmount: 'maximum amount filter for opportunities (optional)',
-          stage: 'Won|Lost|Closed|Open|Negotiation for opportunities (optional)',
-          priority: 'High|Medium|Low for cases (optional)',
-          status: 'Open|Closed for cases (optional)',
-          limit: 'number of results to return (default 20)',
-          deepAnalysis: 'true|false - whether to perform LLM analysis of results'
+          query: 'natural language description of what to search for',
+          deepAnalysis: 'true|false - whether to provide AI analysis of results'
         }
       },
       {
-        name: 'analyze_record',
-        description: 'Deep analysis of a specific record by ID with comprehensive LLM insights',
+        name: 'ask_clarification',
+        description: 'Ask the user for more specific information when the request is unclear or ambiguous',
         parameters: {
-          recordId: 'Salesforce record ID',
-          recordType: 'Case|Account|Opportunity|Contact',
-          analysisType: 'summary|root_cause|recommendations|patterns|trends|all'
+          question: 'specific question to ask the user for clarification'
         }
       },
       {
-        name: 'cross_object_search',
-        description: 'Search across multiple Salesforce objects simultaneously using SOSL',
+        name: 'direct_response',
+        description: 'Provide a helpful response without searching data - for greetings, help, explanations, or guidance',
         parameters: {
-          keywords: 'array of search terms to find across objects',
-          objects: 'array of objects to search: Case,Account,Opportunity,Contact',
-          timeframe: 'last_30_days|last_90_days|all_time (optional)',
-          deepAnalysis: 'true|false - whether to perform LLM analysis'
-        }
-      },
-      {
-        name: 'conversational_response',
-        description: 'Provide helpful guidance or explanation without searching Salesforce data',
-        parameters: {
-          responseType: 'greeting|help|explanation|guidance'
+          response: 'helpful response text'
         }
       }
     ];
@@ -78,20 +58,19 @@ Analyze the user request and determine which tool(s) to use. Return JSON:
 }
 
 Examples:
-- "help me" → conversational_response tool
-- "billing issues" → search_records tool with object="Case", keywords=["billing"], timeframe="last_30_days", deepAnalysis="true"
-- "opportunities with motor > 25k" → search_records tool with object="Opportunity", keywords=["motor"], minAmount=25000, deepAnalysis="true"
-- "recent support cases" → search_records tool with object="Case", timeframe="last_30_days", deepAnalysis="true"
-- "analyze case 12345" → analyze_record tool with recordId="12345", recordType="Case", analysisType="all"
-- "United Oil & Gas accounts and cases" → cross_object_search tool with keywords=["United", "Oil", "Gas"], objects=["Account", "Case"], deepAnalysis="true"
-- "won opportunities last month" → search_records tool with object="Opportunity", stage="Won", timeframe="last_30_days"
+- "help me" → direct_response tool
+- "billing issues" → search_salesforce tool with query="billing issues in support cases", deepAnalysis="true"
+- "opportunities with motor > 25k" → search_salesforce tool with query="opportunities with motor keyword over $25,000", deepAnalysis="true"
+- "recent support cases" → search_salesforce tool with query="recent support cases last 30 days", deepAnalysis="true"
+- "what's going on" → ask_clarification tool asking "What specifically would you like to know about? For example: recent cases, opportunities, account status, etc."
+- "United Oil & Gas" → search_salesforce tool with query="United Oil Gas accounts cases opportunities", deepAnalysis="true"
+- "won opportunities last month" → search_salesforce tool with query="won opportunities last 30 days", deepAnalysis="true"
 
 IMPORTANT: 
-- Use search_records for single object searches (cases, accounts, opportunities, contacts)
-- Use cross_object_search when user wants to search across multiple object types
-- Use analyze_record for specific record analysis by ID
-- Use deepAnalysis="true" when user wants insights, patterns, or understanding
-- Keywords trigger SOSL discovery, filters trigger SOQL constraints
+- Use search_salesforce for any data lookup from Salesforce
+- Use ask_clarification when the request is vague or needs more context
+- Use direct_response for greetings, help, explanations that don't need data
+- Always include deepAnalysis="true" when user wants insights or understanding
 
 Return ONLY JSON, no markdown.
     `;
@@ -221,17 +200,261 @@ Return ONLY JSON, no markdown.
 
   async executeTool(toolName, parameters) {
     switch (toolName) {
-      case 'search_records':
-        return await this.searchRecords(parameters);
-      case 'analyze_record':
-        return await this.analyzeRecord(parameters);
-      case 'cross_object_search':
-        return await this.crossObjectSearch(parameters);
-      case 'conversational_response':
-        return await this.conversationalResponse(parameters);
+      case 'search_salesforce':
+        return await this.searchSalesforce(parameters);
+      case 'ask_clarification':
+        return await this.askClarification(parameters);
+      case 'direct_response':
+        return await this.directResponse(parameters);
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }
+  }
+
+  // Simplified tool implementations
+  async searchSalesforce(params) {
+    if (!this.salesforceService) {
+      throw new Error('Salesforce not connected');
+    }
+
+    try {
+      // Parse the natural language query to determine what to search for
+      const query = params.query.toLowerCase();
+      let searchResults = {};
+
+      // Determine what objects to search based on the query
+      const shouldSearchCases = query.includes('case') || query.includes('support') || query.includes('ticket') || 
+                                query.includes('issue') || query.includes('problem') || query.includes('billing');
+      
+      const shouldSearchOpportunities = query.includes('opportunit') || query.includes('deal') || query.includes('sales') || 
+                                       query.includes('revenue') || query.includes('won') || query.includes('lost') || 
+                                       query.includes('$') || query.includes('amount');
+      
+      const shouldSearchAccounts = query.includes('account') || query.includes('company') || query.includes('client') || 
+                                  query.includes('customer') || shouldSearchOpportunities || shouldSearchCases;
+      
+      const shouldSearchContacts = query.includes('contact') || query.includes('person') || query.includes('email');
+
+      // Extract keywords for SOSL search
+      const keywords = this.extractKeywords(params.query);
+      
+      // If no specific object mentioned, search everything
+      if (!shouldSearchCases && !shouldSearchOpportunities && !shouldSearchAccounts && !shouldSearchContacts) {
+        // Default to cross-object search
+        const soslQuery = `FIND {${keywords.join(' ')}} RETURNING Account(Id, Name, Industry), Case(Id, CaseNumber, Subject, Status), Opportunity(Id, Name, StageName, Amount), Contact(Id, Name, Email)`;
+        
+        const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+        
+        if (soslResult.searchRecords) {
+          searchResults = {
+            accounts: soslResult.searchRecords.filter(r => r.attributes.type === 'Account'),
+            cases: soslResult.searchRecords.filter(r => r.attributes.type === 'Case'),
+            opportunities: soslResult.searchRecords.filter(r => r.attributes.type === 'Opportunity'),
+            contacts: soslResult.searchRecords.filter(r => r.attributes.type === 'Contact')
+          };
+        }
+      } else {
+        // Search specific objects
+        if (shouldSearchCases) {
+          searchResults.cases = await this.searchCases(query, keywords);
+        }
+        if (shouldSearchOpportunities) {
+          searchResults.opportunities = await this.searchOpportunities(query, keywords);
+        }
+        if (shouldSearchAccounts) {
+          searchResults.accounts = await this.searchAccounts(query, keywords);
+        }
+        if (shouldSearchContacts) {
+          searchResults.contacts = await this.searchContacts(query, keywords);
+        }
+      }
+
+      let analysis = null;
+      if (params.deepAnalysis === 'true' || params.deepAnalysis === true) {
+        analysis = await this.generateAnalysis(searchResults, params.query);
+      }
+
+      return {
+        success: true,
+        toolName: 'search_salesforce',
+        data: searchResults,
+        deepAnalysis: analysis,
+        query: params.query,
+        keywords: keywords
+      };
+
+    } catch (error) {
+      console.error('Search Salesforce error:', error);
+      return {
+        success: false,
+        toolName: 'search_salesforce',
+        error: error.message
+      };
+    }
+  }
+
+  async askClarification(params) {
+    return {
+      success: true,
+      toolName: 'ask_clarification',
+      data: params.question,
+      needsClarification: true
+    };
+  }
+
+  async directResponse(params) {
+    return {
+      success: true,
+      toolName: 'direct_response',
+      data: params.response
+    };
+  }
+
+  // Helper methods for searching specific objects
+  async searchCases(query, keywords) {
+    const keywordString = this.sanitizeSOSLKeyword(keywords.join(' '));
+    
+    // Try SOSL first
+    try {
+      const soslQuery = `FIND {${keywordString}} RETURNING Case(Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name, Contact.Name)`;
+      const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+      
+      if (soslResult.searchRecords && soslResult.searchRecords.length > 0) {
+        return soslResult.searchRecords;
+      }
+    } catch (error) {
+      console.log('SOSL failed, trying SOQL:', error.message);
+    }
+
+    // Fallback to SOQL with time constraints
+    let timeCondition = '';
+    if (query.includes('recent') || query.includes('last 30') || query.includes('this month')) {
+      timeCondition = 'AND CreatedDate = LAST_N_DAYS:30';
+    } else if (query.includes('last 90') || query.includes('quarter')) {
+      timeCondition = 'AND CreatedDate = LAST_N_DAYS:90';
+    }
+
+    const soqlQuery = `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name, Contact.Name FROM Case WHERE Subject LIKE '%${keywords[0]}%' ${timeCondition} ORDER BY CreatedDate DESC LIMIT 20`;
+    const soqlResult = await this.salesforceService.executeSOQLQuery(soqlQuery);
+    
+    return soqlResult.records || [];
+  }
+
+  async searchOpportunities(query, keywords) {
+    const keywordString = this.sanitizeSOSLKeyword(keywords.join(' '));
+    
+    try {
+      const soslQuery = `FIND {${keywordString}} RETURNING Opportunity(Id, Name, StageName, Amount, CloseDate, Account.Name)`;
+      const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+      
+      if (soslResult.searchRecords && soslResult.searchRecords.length > 0) {
+        return soslResult.searchRecords;
+      }
+    } catch (error) {
+      console.log('Opportunity SOSL failed, trying SOQL:', error.message);
+    }
+
+    // Fallback with filters
+    let conditions = [`Name LIKE '%${keywords[0]}%'`];
+    
+    if (query.includes('won')) conditions.push('IsWon = true');
+    if (query.includes('lost')) conditions.push('IsWon = false AND IsClosed = true');
+    if (query.includes('open')) conditions.push('IsClosed = false');
+    
+    // Amount filters
+    const amountMatch = query.match(/(\d+)k?/);
+    if (amountMatch) {
+      const amount = parseInt(amountMatch[1]) * (query.includes('k') ? 1000 : 1);
+      if (query.includes('>') || query.includes('over') || query.includes('above')) {
+        conditions.push(`Amount > ${amount}`);
+      }
+    }
+
+    const soqlQuery = `SELECT Id, Name, StageName, Amount, CloseDate, Account.Name FROM Opportunity WHERE ${conditions.join(' AND ')} ORDER BY CreatedDate DESC LIMIT 20`;
+    const soqlResult = await this.salesforceService.executeSOQLQuery(soqlQuery);
+    
+    return soqlResult.records || [];
+  }
+
+  async searchAccounts(query, keywords) {
+    const keywordString = this.sanitizeSOSLKeyword(keywords.join(' '));
+    
+    try {
+      const soslQuery = `FIND {${keywordString}} RETURNING Account(Id, Name, Industry, Phone, Type)`;
+      const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+      
+      if (soslResult.searchRecords && soslResult.searchRecords.length > 0) {
+        return soslResult.searchRecords;
+      }
+    } catch (error) {
+      console.log('Account SOSL failed, trying SOQL:', error.message);
+    }
+
+    const soqlQuery = `SELECT Id, Name, Industry, Phone, Type FROM Account WHERE Name LIKE '%${keywords[0]}%' ORDER BY CreatedDate DESC LIMIT 20`;
+    const soqlResult = await this.salesforceService.executeSOQLQuery(soqlQuery);
+    
+    return soqlResult.records || [];
+  }
+
+  async searchContacts(query, keywords) {
+    const keywordString = this.sanitizeSOSLKeyword(keywords.join(' '));
+    
+    try {
+      const soslQuery = `FIND {${keywordString}} RETURNING Contact(Id, Name, Email, Phone, Title, Account.Name)`;
+      const soslResult = await this.salesforceService.executeSOSLQuery(soslQuery);
+      
+      if (soslResult.searchRecords && soslResult.searchRecords.length > 0) {
+        return soslResult.searchRecords;
+      }
+    } catch (error) {
+      console.log('Contact SOSL failed, trying SOQL:', error.message);
+    }
+
+    const soqlQuery = `SELECT Id, Name, Email, Phone, Title, Account.Name FROM Contact WHERE Name LIKE '%${keywords[0]}%' ORDER BY CreatedDate DESC LIMIT 20`;
+    const soqlResult = await this.salesforceService.executeSOQLQuery(soqlQuery);
+    
+    return soqlResult.records || [];
+  }
+
+  extractKeywords(query) {
+    const stopWords = ['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'a', 'an', 'is', 'are', 'was', 'were', 'get', 'find', 'search', 'show', 'recent', 'last', 'over', 'under', 'above', 'below'];
+    const words = query.toLowerCase().split(/\s+|[,&]+/).map(w => w.trim()).filter(w => w.length > 2);
+    return words.filter(word => !stopWords.includes(word));
+  }
+
+  async generateAnalysis(results, originalQuery) {
+    let totalResults = 0;
+    let analysisText = "## Analysis Summary:\n\n";
+
+    Object.keys(results).forEach(key => {
+      if (results[key] && results[key].length > 0) {
+        totalResults += results[key].length;
+        analysisText += `- Found ${results[key].length} ${key}\n`;
+      }
+    });
+
+    if (totalResults === 0) {
+      return "No results found matching your search criteria. Try different keywords or broader search terms.";
+    }
+
+    analysisText += `\n**Total Results:** ${totalResults} records\n`;
+    
+    // Simple pattern detection
+    if (results.cases && results.cases.length > 0) {
+      const openCases = results.cases.filter(c => c.Status !== 'Closed').length;
+      if (openCases > 0) {
+        analysisText += `\n**Cases:** ${openCases} of ${results.cases.length} cases are still open`;
+      }
+    }
+
+    if (results.opportunities && results.opportunities.length > 0) {
+      const totalAmount = results.opportunities.reduce((sum, opp) => sum + (opp.Amount || 0), 0);
+      if (totalAmount > 0) {
+        analysisText += `\n**Opportunities:** Total pipeline value: $${totalAmount.toLocaleString()}`;
+      }
+    }
+
+    return analysisText;
   }
 
   // Tool implementations

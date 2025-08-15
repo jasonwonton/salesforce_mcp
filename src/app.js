@@ -42,8 +42,8 @@ const slackApp = new App({
   receiver
 });
 
-// Slack slash command handler
-slackApp.command('/support', async ({ command, ack, respond, context }) => {
+// Simple /ask command with threaded conversation support
+slackApp.command('/ask', async ({ command, ack, respond, context }) => {
   await ack();
 
   try {
@@ -79,28 +79,95 @@ slackApp.command('/support', async ({ command, ack, respond, context }) => {
       return;
     }
 
-    // Parse the command text
-    const commandText = command.text.trim();
-    const searchMatch = commandText.match(/look through support tickets for customers with (.+)/i);
+    const userRequest = command.text.trim();
     
-    if (!searchMatch) {
-      await respond('Usage: `/support look through support tickets for customers with [search term]`');
+    if (!userRequest) {
+      await respond('Please provide a question or request.\n\nExample: `/ask Recent support cases for Enterprise accounts`');
       return;
     }
 
-    const searchTerm = searchMatch[1];
+    // Show thinking message
+    const thinkingResponse = await respond({
+      text: `🤔 Analyzing your request: "${userRequest}"`,
+      response_type: "in_channel"
+    });
+
+    // Initialize tool service
+    const toolService = new ToolService(team);
     
-    // Search Salesforce
-    const salesforceService = new SalesforceService(team);
-    const cases = await salesforceService.searchSupportTickets(searchTerm);
+    // Analyze request and create plan
+    let toolPlan;
+    try {
+      toolPlan = await toolService.analyzeRequestAndSelectTools(userRequest);
+    } catch (error) {
+      console.error('Tool analysis failed:', error);
+      await respond({
+        text: `❌ Sorry, I had trouble understanding your request. Please try rephrasing it.\n\nError: ${error.message}`,
+        response_type: "ephemeral"
+      });
+      return;
+    }
+
+    // Execute tools with status updates
+    await respond({
+      text: `🎯 **Plan:** ${toolPlan.reasoning}\n\n🚀 Executing...`,
+      response_type: "in_channel"
+    });
+
+    const toolResults = [];
+    for (let i = 0; i < toolPlan.selectedTools.length; i++) {
+      const toolCall = toolPlan.selectedTools[i];
+      
+      // Show what we're doing
+      await respond({
+        text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
+        response_type: "in_channel"
+      });
+      
+      const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
+      toolResults.push(result);
+      
+      // Show completion
+      const status = result.success ? "✅" : "❌";
+      await respond({
+        text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
+        response_type: "in_channel"
+      });
+    }
+
+    // Format and send final results
+    let finalResponse = "📋 **Results:**\n\n";
+    finalResponse += formatToolResults(toolResults);
+    
+    const finalMessage = await respond({
+      text: finalResponse,
+      response_type: "in_channel"
+    });
+
+    // Store thread context for follow-up responses
+    global.activeThreads = global.activeThreads || {};
+    global.activeThreads[finalMessage.ts] = {
+      teamId,
+      userRequest,
+      toolResults,
+      timestamp: Date.now()
+    };
+
+    // Provide guidance for follow-up
+    setTimeout(async () => {
+      await respond({
+        text: "💬 You can ask follow-up questions by replying to this thread, or start a new search with `/ask [new question]`",
+        response_type: "ephemeral"
+      });
+    }, 1000);
     
     // Log usage
     await db('usage_logs').insert({
       team_id: teamId,
       slack_user_id: command.user_id,
-      command: '/support',
-      query_text: searchTerm,
-      results_count: cases.length
+      command: '/ask',
+      query_text: userRequest,
+      results_count: toolResults.length
     });
 
     // Format and send response
@@ -391,260 +458,87 @@ function formatToolResults(toolResults) {
   let responseText = '';
   
   for (const result of toolResults) {
-    if (result.toolName === 'conversational_response') {
-      responseText = `💬 ${result.message}`;
+    if (result.toolName === 'direct_response') {
+      responseText = `💬 ${result.data}`;
       break;
-    } else if (result.success) {
-      responseText += `🔍 **${result.toolName}**: Found ${result.count} results\n`;
+    } else if (result.toolName === 'ask_clarification') {
+      responseText = `❓ **Need more info:** ${result.data}`;
+      break;
+    } else if (result.success && result.toolName === 'search_salesforce') {
+      // Show the original query
+      responseText += `🔍 **Searched for:** "${result.query}"\n`;
+      if (result.keywords && result.keywords.length > 0) {
+        responseText += `📝 **Keywords:** ${result.keywords.join(', ')}\n\n`;
+      }
       
-      // Show executed queries for any tool that has them
-      if (result.executedQueries && result.executedQueries.length > 0) {
-        responseText += `📝 **Executed Queries:**\n`;
-        result.executedQueries.forEach((query, index) => {
-          responseText += `${index + 1}. \`${query}\`\n`;
+      const data = result.data;
+      let totalResults = 0;
+      
+      // Count total results
+      Object.keys(data).forEach(key => {
+        if (data[key] && data[key].length > 0) {
+          totalResults += data[key].length;
+        }
+      });
+      
+      if (totalResults === 0) {
+        responseText += `❌ No results found. Try different keywords or broader search terms.\n\n`;
+        continue;
+      }
+      
+      responseText += `📊 **Found ${totalResults} results**\n\n`;
+      
+      // Show cases with Salesforce links
+      if (data.cases && data.cases.length > 0) {
+        responseText += `📋 **Cases (${data.cases.length}):**\n`;
+        data.cases.slice(0, 5).forEach((case_, index) => {
+          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${case_.Id}`;
+          responseText += `${index + 1}. <${sfUrl}|${case_.CaseNumber || case_.Id}>: ${case_.Subject || 'No Subject'} (${case_.Status || 'Unknown'})\n`;
+          if (case_.CreatedDate) {
+            responseText += `   📅 Created: ${new Date(case_.CreatedDate).toLocaleDateString()}\n`;
+          }
+          if (case_.Priority) {
+            responseText += `   🔥 Priority: ${case_.Priority}\n`;
+          }
         });
         responseText += '\n';
       }
       
-      // Handle SOSL Discovery search results
-      if (result.toolName === 'sosl_discovery_search' && result.data) {
-        
-        // Show thinking process
-        if (result.thinkingProcess) {
-          responseText += `🧠 **AI Thinking Process:**\n`;
-          result.thinkingProcess.forEach(step => {
-            responseText += `${step}\n`;
-          });
-          responseText += '\n';
-        }
-        
-        if (result.breakdown) {
-          responseText += `📊 **Discovery Results:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
-        }
-        
-        // Show cases with Salesforce links
-        if (result.data.cases && result.data.cases.length > 0) {
-          responseText += `📋 **Cases Found:**\n`;
-          result.data.cases.slice(0, 5).forEach((case_, index) => {
-            // Construct Salesforce URL (you'll need to update with your org's URL)
-            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${case_.Id}`;
-            responseText += `${index + 1}. <${sfUrl}|${case_.CaseNumber}>: ${case_.Subject} (${case_.Status})\n`;
-            if (case_.CreatedDate) {
-              responseText += `   📅 Created: ${new Date(case_.CreatedDate).toLocaleDateString()}\n`;
-            }
-            if (case_.Priority) {
-              responseText += `   🔥 Priority: ${case_.Priority}\n`;
-            }
-          });
-          responseText += '\n';
-        }
-        
-        // Show accounts with links
-        if (result.data.accounts && result.data.accounts.length > 0) {
-          responseText += `🏢 **Accounts Found:**\n`;
-          result.data.accounts.slice(0, 3).forEach((account, index) => {
-            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${account.Id}`;
-            responseText += `${index + 1}. <${sfUrl}|${account.Name}> (${account.Industry || 'Unknown Industry'})\n`;
-          });
-          responseText += '\n';
-        }
-        
-        // Show deep analysis if performed
-        if (result.data.deepAnalysis) {
-          responseText += `🧠 **AI Deep Analysis:**\n${result.data.deepAnalysis}\n\n`;
-        }
-        
-        // Add research prompt
-        if (result.data.cases && result.data.cases.length > 0) {
-          const firstCase = result.data.cases[0];
-          responseText += `🔍 **Want to research specific cases?**\n`;
-          responseText += `Type: \`/station analyze case ${firstCase.CaseNumber || firstCase.Id}\`\n\n`;
-        }
-      }
-      // Handle multi-object search results (legacy)
-      else if (result.toolName === 'search_all_objects' && result.data) {
-        if (result.breakdown) {
-          responseText += `📊 **Breakdown:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
-        }
-        
-        // Show cases first
-        if (result.data.cases && result.data.cases.length > 0) {
-          responseText += `📋 **Cases:**\n`;
-          result.data.cases.slice(0, 3).forEach((case_, index) => {
-            responseText += `${index + 1}. ${case_.CaseNumber}: ${case_.Subject}\n`;
-          });
-        }
-        
-        // Show accounts
-        if (result.data.accounts && result.data.accounts.length > 0) {
-          responseText += `🏢 **Accounts:**\n`;
-          result.data.accounts.slice(0, 3).forEach((account, index) => {
-            responseText += `${index + 1}. ${account.Name}\n`;
-          });
-        }
-        
-        // Show opportunities
-        if (result.data.opportunities && result.data.opportunities.length > 0) {
-          responseText += `💰 **Opportunities:**\n`;
-          result.data.opportunities.slice(0, 2).forEach((opp, index) => {
-            responseText += `${index + 1}. ${opp.Name} (${opp.StageName})\n`;
-          });
-        }
-      } 
-      // Handle deep record analysis results
-      else if (result.toolName === 'deep_record_analysis') {
-        responseText += `🕵️ **Deep Analysis of ${result.recordType}:**\n\n`;
-        
-        if (result.recordType === 'Case' && result.record) {
-          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${result.record.Id}`;
-          responseText += `📋 **Case:** <${sfUrl}|${result.record.CaseNumber}> - ${result.record.Subject}\n`;
-          responseText += `🏢 **Account:** ${result.record.Account?.Name}\n`;
-          responseText += `📊 **Status:** ${result.record.Status} | **Priority:** ${result.record.Priority}\n`;
-          responseText += `📅 **Created:** ${new Date(result.record.CreatedDate).toLocaleDateString()}\n`;
-          responseText += `📊 **Related Cases:** ${result.relatedRecords}\n\n`;
-        }
-        
-        if (result.aiAnalysis) {
-          responseText += `🧠 **AI ${result.analysisType} Analysis:**\n${result.aiAnalysis}\n\n`;
-        }
-        
-        responseText += `🔍 **Want to research more?** Try:\n`;
-        responseText += `• \`/station billing issues last 30 days\` - Find similar cases\n`;
-        responseText += `• \`/station analyze account ${result.record?.Account?.Name || 'ACCOUNT_NAME'}\` - Account health\n`;
-      }
-      // Handle deep analysis results (legacy)
-      else if (result.analysis === 'deep') {
-        if (result.toolName === 'analyze_case_details') {
-          responseText += `📋 **Case:** ${result.caseData.CaseNumber} - ${result.caseData.Subject}\n`;
-          responseText += `🏢 **Account:** ${result.caseData.Account?.Name}\n`;
-          responseText += `📊 **Related Cases:** ${result.relatedCases}\n\n`;
-          responseText += `🤖 **AI Analysis:**\n${result.aiAnalysis}\n`;
-        } else if (result.toolName === 'analyze_account_health') {
-          responseText += `🏢 **Account:** ${result.account.Name} (${result.account.Industry})\n`;
-          responseText += `📊 **Support History:** ${result.caseCount} cases, ${result.opportunityCount} opportunities\n\n`;
-          responseText += `🤖 **Health Analysis:**\n${result.aiAnalysis}\n`;
-        }
-      }
-      // Handle trend analysis
-      else if (result.analysis === 'trends') {
-        responseText += `📈 **Analysis Type:** ${result.analysisType}\n`;
-        responseText += `📅 **Period:** ${result.timeframe}\n`;
-        responseText += `📊 **Data Points:** ${result.dataPoints}\n\n`;
-        responseText += `🤖 **Trend Analysis:**\n${result.aiAnalysis}\n`;
-      }
-      // Handle advanced opportunity search results
-      else if (result.toolName === 'advanced_opportunity_search' && result.data && result.data.length > 0) {
-        responseText += `💰 **Opportunities Found:**\n`;
-        result.data.slice(0, 5).forEach((opp, index) => {
+      // Show opportunities
+      if (data.opportunities && data.opportunities.length > 0) {
+        responseText += `💰 **Opportunities (${data.opportunities.length}):**\n`;
+        data.opportunities.slice(0, 5).forEach((opp, index) => {
           const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${opp.Id}`;
           const amount = opp.Amount ? `$${Number(opp.Amount).toLocaleString()}` : 'No amount';
-          responseText += `${index + 1}. <${sfUrl}|${opp.Name}> - ${amount} (${opp.StageName})\n`;
-          if (opp.Account && opp.Account.Name) {
-            responseText += `   🏢 Account: ${opp.Account.Name}\n`;
-          }
-          if (opp.CloseDate) {
-            responseText += `   📅 Close Date: ${new Date(opp.CloseDate).toLocaleDateString()}\n`;
-          }
+          responseText += `${index + 1}. <${sfUrl}|${opp.Name}>: ${amount} (${opp.StageName || 'Unknown Stage'})\n`;
         });
         responseText += '\n';
       }
-      // Handle new search_records tool results
-      else if (result.toolName === 'search_records' && result.data && result.data.length > 0) {
-        responseText += `🔍 **${result.searchStrategy}**\n\n`;
-        
-        result.data.slice(0, 5).forEach((record, index) => {
-          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${record.Id}`;
-          
-          if (record.CaseNumber) {
-            // Case records
-            responseText += `${index + 1}. <${sfUrl}|${record.CaseNumber}>: ${record.Subject} (${record.Status})\n`;
-            if (record.Priority) responseText += `   🔥 Priority: ${record.Priority}\n`;
-            if (record.Account && record.Account.Name) responseText += `   🏢 Account: ${record.Account.Name}\n`;
-          } else if (record.Amount !== undefined) {
-            // Opportunity records
-            const amount = record.Amount ? `$${Number(record.Amount).toLocaleString()}` : 'No amount';
-            responseText += `${index + 1}. <${sfUrl}|${record.Name}> - ${amount} (${record.StageName})\n`;
-            if (record.Account && record.Account.Name) responseText += `   🏢 Account: ${record.Account.Name}\n`;
-            if (record.CloseDate) responseText += `   📅 Close Date: ${new Date(record.CloseDate).toLocaleDateString()}\n`;
-          } else if (record.Industry !== undefined) {
-            // Account records
-            responseText += `${index + 1}. <${sfUrl}|${record.Name}> (${record.Industry || 'Unknown Industry'})\n`;
-            if (record.Phone) responseText += `   📞 Phone: ${record.Phone}\n`;
-          } else if (record.Email !== undefined) {
-            // Contact records
-            responseText += `${index + 1}. <${sfUrl}|${record.Name}> (${record.Title || 'No Title'})\n`;
-            responseText += `   📧 Email: ${record.Email}\n`;
-            if (record.Account && record.Account.Name) responseText += `   🏢 Account: ${record.Account.Name}\n`;
-          }
+      
+      // Show accounts
+      if (data.accounts && data.accounts.length > 0) {
+        responseText += `🏢 **Accounts (${data.accounts.length}):**\n`;
+        data.accounts.slice(0, 5).forEach((account, index) => {
+          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${account.Id}`;
+          responseText += `${index + 1}. <${sfUrl}|${account.Name}> (${account.Industry || 'Unknown Industry'})\n`;
         });
-        
-        if (result.deepAnalysis) {
-          responseText += `\n🧠 **AI Analysis:**\n${result.deepAnalysis}\n`;
-        }
         responseText += '\n';
       }
-      // Handle analyze_record tool results
-      else if (result.toolName === 'analyze_record' && result.record) {
-        const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${result.record.Id}`;
-        responseText += `🔍 **Record Analysis:**\n`;
-        responseText += `📋 <${sfUrl}|${result.record.CaseNumber || result.record.Name}>\n`;
-        if (result.analysis) {
-          responseText += `\n🧠 **AI Analysis:**\n${result.analysis}\n`;
-        }
+      
+      // Show contacts
+      if (data.contacts && data.contacts.length > 0) {
+        responseText += `👤 **Contacts (${data.contacts.length}):**\n`;
+        data.contacts.slice(0, 5).forEach((contact, index) => {
+          const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${contact.Id}`;
+          responseText += `${index + 1}. <${sfUrl}|${contact.Name}> (${contact.Email || 'No email'})\n`;
+        });
         responseText += '\n';
       }
-      // Handle cross_object_search tool results  
-      else if (result.toolName === 'cross_object_search' && result.data) {
-        if (result.breakdown) {
-          responseText += `📊 **Cross-Object Results:** ${result.breakdown.accounts} accounts, ${result.breakdown.contacts} contacts, ${result.breakdown.cases} cases, ${result.breakdown.opportunities} opportunities\n\n`;
-        }
-        
-        // Show cases
-        if (result.data.cases && result.data.cases.length > 0) {
-          responseText += `📋 **Cases:**\n`;
-          result.data.cases.slice(0, 3).forEach((case_, index) => {
-            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${case_.Id}`;
-            responseText += `${index + 1}. <${sfUrl}|${case_.CaseNumber}>: ${case_.Subject} (${case_.Status})\n`;
-          });
-          responseText += '\n';
-        }
-        
-        // Show opportunities
-        if (result.data.opportunities && result.data.opportunities.length > 0) {
-          responseText += `💰 **Opportunities:**\n`;
-          result.data.opportunities.slice(0, 3).forEach((opp, index) => {
-            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${opp.Id}`;
-            const amount = opp.Amount ? `$${Number(opp.Amount).toLocaleString()}` : 'No amount';
-            responseText += `${index + 1}. <${sfUrl}|${opp.Name}> - ${amount} (${opp.StageName})\n`;
-          });
-          responseText += '\n';
-        }
-        
-        // Show accounts
-        if (result.data.accounts && result.data.accounts.length > 0) {
-          responseText += `🏢 **Accounts:**\n`;
-          result.data.accounts.slice(0, 3).forEach((account, index) => {
-            const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${account.Id}`;
-            responseText += `${index + 1}. <${sfUrl}|${account.Name}> (${account.Industry || 'Unknown'})\n`;
-          });
-          responseText += '\n';
-        }
-        
-        if (result.deepAnalysis) {
-          responseText += `🧠 **Cross-Object Analysis:**\n${result.deepAnalysis}\n\n`;
-        }
+      
+      // Show AI analysis if present
+      if (result.deepAnalysis) {
+        responseText += `🧠 **AI Analysis:**\n${result.deepAnalysis}\n\n`;
       }
-      // Handle single-object results (fallback)
-      else if (result.data && result.data.length > 0) {
-        result.data.slice(0, 5).forEach((item, index) => {
-          if (item.CaseNumber) {
-            responseText += `${index + 1}. ${item.CaseNumber}: ${item.Subject}\n`;
-          } else if (item.Name) {
-            responseText += `${index + 1}. ${item.Name}\n`;
-          }
-        });
-      }
-      responseText += '\n';
     } else {
       responseText += `❌ **${result.toolName}**: ${result.error}\n\n`;
     }
@@ -652,7 +546,6 @@ function formatToolResults(toolResults) {
   
   return responseText;
 }
-
 // Handle plan approval button
 slackApp.action('approve_plan', async ({ body, ack, respond, context }) => {
   await ack();
@@ -703,43 +596,26 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context }) => {
     let finalResponse = progressText + "\n📋 **Results:**\n\n";
     finalResponse += formatToolResults(toolResults);
     
-    // Add conversation continuation buttons
+    // Send final results without action buttons
     await respond({
       text: finalResponse,
-      response_type: "in_channel",
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: finalResponse
-          }
-        },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "💬 Ask AI Question"
-              },
-              value: "ask_question",
-              action_id: "prompt_question"
-            },
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "🔍 New Search"
-              },
-              value: "new_search",
-              action_id: "prompt_new_search"
-            }
-          ]
-        }
-      ]
+      response_type: "in_channel"
     });
+    
+    // Send follow-up guidance as successive messages
+    setTimeout(async () => {
+      await respond({
+        text: "💬 **Want to ask questions about these results?**\nType: `/station ask [your question]`\n\nExample: `/station ask What are the main issues?`",
+        response_type: "ephemeral"
+      });
+    }, 1000);
+    
+    setTimeout(async () => {
+      await respond({
+        text: "🔍 **Ready for a new search?**\nType: `/station [your request]`\n\nExample: `/station Recent billing issues for Enterprise accounts`",
+        response_type: "ephemeral"
+      });
+    }, 2000);
     
     // Clear the pending plan
     delete global.pendingPlans[planKey];
@@ -784,25 +660,8 @@ slackApp.action('cancel_plan', async ({ body, ack, respond, context }) => {
   });
 });
 
-// Handle question prompting button
-slackApp.action('prompt_question', async ({ body, ack, respond, context }) => {
-  await ack();
-  
-  await respond({
-    text: "💬 **What would you like to ask about the results?**\n\nExample questions:\n• What are the main issues?\n• Which cases need immediate attention?\n• What patterns do you see?\n\nType: `/station ask [your question]`",
-    response_type: "ephemeral"
-  });
-});
-
-// Handle new search prompting button  
-slackApp.action('prompt_new_search', async ({ body, ack, respond, context }) => {
-  await ack();
-  
-  await respond({
-    text: "🔍 **Ready for a new search!**\n\nDescribe what you're looking for:\n• Recent billing issues\n• Account health for [company]\n• Open opportunities this month\n• Support trends\n\nType: `/station [your request]`",
-    response_type: "ephemeral"
-  });
-});
+// Action handlers for prompt_question and prompt_new_search removed
+// These buttons have been replaced with successive messages to avoid 404 errors
 
 // Handle interactive button clicks for follow-up questions
 slackApp.action('ask_summarize', async ({ body, ack, respond, context }) => {
@@ -925,6 +784,148 @@ slackApp.action('ask_nextsteps', async ({ body, ack, respond, context }) => {
     });
   }
 });
+
+// Handle threaded message responses
+slackApp.message(async ({ message, say, context }) => {
+  // Only handle threaded messages (replies)
+  if (!message.thread_ts) return;
+  
+  // Check if this is a thread we're tracking
+  global.activeThreads = global.activeThreads || {};
+  const threadContext = global.activeThreads[message.thread_ts];
+  
+  if (!threadContext) return;
+  
+  // Clean up old threads (older than 1 hour)
+  const oneHourAgo = Date.now() - (60 * 60 * 1000);
+  Object.keys(global.activeThreads).forEach(threadId => {
+    if (global.activeThreads[threadId].timestamp < oneHourAgo) {
+      delete global.activeThreads[threadId];
+    }
+  });
+  
+  try {
+    const team = await Team.findById(threadContext.teamId);
+    if (!team) return;
+    
+    const userQuestion = message.text;
+    
+    // Show thinking
+    await say({
+      text: `🤔 Analyzing your follow-up question: "${userQuestion}"`,
+      thread_ts: message.thread_ts
+    });
+    
+    const toolService = new ToolService(team);
+    
+    // Decide if we need new data or can answer from context
+    const needsNewSearch = await shouldSearchForNewData(userQuestion, threadContext.userRequest);
+    
+    if (needsNewSearch) {
+      // Perform new search
+      await say({
+        text: `🔍 This question requires new data. Searching...`,
+        thread_ts: message.thread_ts
+      });
+      
+      let toolPlan;
+      try {
+        toolPlan = await toolService.analyzeRequestAndSelectTools(userQuestion);
+      } catch (error) {
+        await say({
+          text: `❌ Sorry, I had trouble understanding your question: ${error.message}`,
+          thread_ts: message.thread_ts
+        });
+        return;
+      }
+      
+      // Execute tools
+      const toolResults = [];
+      for (const toolCall of toolPlan.selectedTools) {
+        const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
+        toolResults.push(result);
+      }
+      
+      let response = "📋 **New Results:**\n\n";
+      response += formatToolResults(toolResults);
+      
+      await say({
+        text: response,
+        thread_ts: message.thread_ts
+      });
+      
+      // Update thread context
+      threadContext.toolResults = toolResults;
+      threadContext.timestamp = Date.now();
+      
+    } else {
+      // Answer from existing context
+      await say({
+        text: `💭 Let me analyze the existing data to answer your question...`,
+        thread_ts: message.thread_ts
+      });
+      
+      const contextualAnswer = await generateContextualAnswer(userQuestion, threadContext.toolResults);
+      
+      await say({
+        text: `💬 **Answer:**\n\n${contextualAnswer}`,
+        thread_ts: message.thread_ts
+      });
+    }
+    
+  } catch (error) {
+    console.error('Thread message error:', error);
+    await say({
+      text: `❌ Sorry, I encountered an error: ${error.message}`,
+      thread_ts: message.thread_ts
+    });
+  }
+});
+
+// Helper function to determine if new search is needed
+async function shouldSearchForNewData(question, originalRequest) {
+  const contextualKeywords = ['what', 'which', 'how many', 'explain', 'analyze', 'summarize', 'why', 'when'];
+  const searchKeywords = ['find', 'search', 'get', 'show', 'recent', 'new', 'different', 'other'];
+  
+  const lowerQuestion = question.toLowerCase();
+  
+  // Simple heuristic: if question contains search terms, do new search
+  return searchKeywords.some(keyword => lowerQuestion.includes(keyword));
+}
+
+// Helper function to generate contextual answers
+async function generateContextualAnswer(question, toolResults) {
+  // Simple contextual analysis
+  let context = "Based on the previous search results:\n\n";
+  
+  toolResults.forEach((result, index) => {
+    if (result.success && result.data) {
+      if (Array.isArray(result.data)) {
+        context += `- Found ${result.data.length} ${result.toolName.replace('_', ' ')} results\n`;
+      } else if (typeof result.data === 'object') {
+        const keys = Object.keys(result.data);
+        keys.forEach(key => {
+          if (Array.isArray(result.data[key])) {
+            context += `- Found ${result.data[key].length} ${key}\n`;
+          }
+        });
+      }
+    }
+  });
+  
+  // Basic question answering
+  const lowerQuestion = question.toLowerCase();
+  
+  if (lowerQuestion.includes('how many') || lowerQuestion.includes('count')) {
+    return context + "\nUse the counts above to answer your question.";
+  }
+  
+  if (lowerQuestion.includes('summarize') || lowerQuestion.includes('summary')) {
+    return context + "\nThis summarizes what was found in the previous search.";
+  }
+  
+  return context + "\nI can help analyze this data further. Try asking specific questions about the results above.";
+}
 
 // Get the Express app from receiver
 const app = receiver.app;
