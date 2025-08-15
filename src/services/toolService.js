@@ -182,27 +182,31 @@ Return ONLY JSON, no markdown.
                                   parsedParams.maxAmount || parsedParams.caseStatus || parsedParams.casePriority || 
                                   parsedParams.accountType || parsedParams.accountHealth || parsedParams.contactRole;
       
+      // Check if keywords are actually searchable or just filter values
+      const hasSearchableKeywords = this.hasSearchableKeywords(parsedParams);
+      
       console.log('📊 Strategy Analysis:');
       console.log('  - Has Keywords:', hasKeywords);
       console.log('  - Has Structured Filters:', hasStructuredFilters);
+      console.log('  - Has Searchable Keywords:', hasSearchableKeywords);
       console.log('  - Keywords:', parsedParams.keywords);
       console.log('  - Time Range:', parsedParams.timeRange);
       console.log('  - Object Types:', parsedParams.objectTypes);
       
       let searchResults = {};
       
-      // Strategy 1: Combined SOSL + SOQL (keywords + structured filters)
-      if (hasKeywords && hasStructuredFilters) {
+      // Strategy 1: Combined SOSL + SOQL (searchable keywords + structured filters)
+      if (hasSearchableKeywords && hasStructuredFilters) {
         console.log('📊 Using combined SOSL + SOQL strategy');
         searchResults = await this.searchWithSOSLAndSOQL(parsedParams);
       }
-      // Strategy 2: Pure SOQL (structured filters only)
-      else if (!hasKeywords && hasStructuredFilters) {
-        console.log('📊 Using pure SOQL strategy');
+      // Strategy 2: Pure SOQL (structured filters only, or non-searchable keywords)
+      else if (hasStructuredFilters || (hasKeywords && !hasSearchableKeywords)) {
+        console.log('📊 Using pure SOQL strategy (structured filters or non-searchable keywords)');
         searchResults = await this.searchWithSOQLOnly(parsedParams);
       }
-      // Strategy 3: Pure SOSL (keywords only, cross-object)
-      else if (hasKeywords && !hasStructuredFilters) {
+      // Strategy 3: Pure SOSL (searchable keywords only, cross-object)
+      else if (hasSearchableKeywords && !hasStructuredFilters) {
         console.log('📊 Using pure SOSL strategy');
         searchResults = await this.searchWithSOSLOnly(parsedParams);
       }
@@ -329,7 +333,7 @@ Return ONLY JSON, no markdown.
     console.log('🔄 Using default fallback strategy - searching recent cases');
     
     // Default to searching cases with basic criteria
-    const defaultQuery = `SELECT Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name FROM Case ORDER BY CreatedDate DESC LIMIT 20`;
+    const defaultQuery = `SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Account.AnnualRevenue FROM Case ORDER BY CreatedDate DESC LIMIT 1000`;
     
     console.log(`  🔍 Default SOQL query: ${defaultQuery}`);
     
@@ -435,7 +439,7 @@ Return ONLY JSON, no markdown.
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const fields = this.getFieldsForObject(objectType);
     
-    const finalQuery = `SELECT ${fields} FROM ${objectType} ${whereClause} ORDER BY CreatedDate DESC LIMIT 50`;
+    const finalQuery = `SELECT ${fields} FROM ${objectType} ${whereClause} ORDER BY CreatedDate DESC LIMIT 1000`;
     
     console.log(`  🔍 Generated SOQL for ${objectType}:`);
     console.log(`    ${finalQuery}`);
@@ -556,12 +560,31 @@ Return ONLY JSON, no markdown.
   // Helper: Get fields for each object type
   getFieldsForObject(objectType) {
     const fieldMap = {
-      'Case': 'Id, CaseNumber, Subject, Status, Priority, CreatedDate, Account.Name, Contact.Name',
-      'Account': 'Id, Name, Industry, Type, Phone, CreatedDate',
-      'Opportunity': 'Id, Name, StageName, Amount, CloseDate, CreatedDate, Account.Name',
-      'Contact': 'Id, Name, Email, Phone, Title, CreatedDate, Account.Name'
+      'Case': 'Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Account.AnnualRevenue, Contact.Name',
+      'Account': 'Id, Name, Industry, Type, Phone, CreatedDate, AnnualRevenue',
+      'Opportunity': 'Id, Name, StageName, Amount, CloseDate, CreatedDate, Account.Name, Account.AnnualRevenue',
+      'Contact': 'Id, Name, Email, Phone, Title, CreatedDate, Account.Name, Account.AnnualRevenue'
     };
     return fieldMap[objectType] || 'Id, Name, CreatedDate';
+  }
+
+  // Helper: Check if keywords are actually searchable or just filter values
+  hasSearchableKeywords(params) {
+    if (!params.keywords || params.keywords.length === 0) return false;
+    
+    // Keywords that are filter values, not searchable text
+    const filterKeywords = [
+      'open', 'closed', 'won', 'lost', 'high', 'medium', 'low', 'critical',
+      'customer', 'prospect', 'partner', 'internal', 'green', 'yellow', 'red',
+      'today', 'yesterday', 'this_week', 'this_month', 'last_30_days', 'last_90_days'
+    ];
+    
+    // If all keywords are filter values, they're not searchable
+    const allFilterKeywords = params.keywords.every(keyword => 
+      filterKeywords.includes(keyword.toLowerCase())
+    );
+    
+    return !allFilterKeywords;
   }
 
   // Helper: Sanitize keywords (handle special characters like &)

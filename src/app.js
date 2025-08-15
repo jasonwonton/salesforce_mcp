@@ -365,14 +365,25 @@ function formatToolResults(toolResults) {
       // Show cases with Salesforce links
       if (data.cases && data.cases.length > 0) {
         responseText += `📋 **Cases (${data.cases.length}):**\n`;
-        data.cases.slice(0, 5).forEach((case_, index) => {
+        data.cases.forEach((case_, index) => {
           const sfUrl = `https://orgfarm-9be6ff69a6-dev-ed.develop.my.salesforce.com/${case_.Id}`;
           responseText += `${index + 1}. <${sfUrl}|${case_.CaseNumber || case_.Id}>: ${case_.Subject || 'No Subject'} (${case_.Status || 'Unknown'})\n`;
+          
+          // Show days ago instead of created date
           if (case_.CreatedDate) {
-            responseText += `   📅 Created: ${new Date(case_.CreatedDate).toLocaleDateString()}\n`;
+            const daysAgo = Math.floor((Date.now() - new Date(case_.CreatedDate)) / (1000 * 60 * 60 * 24));
+            responseText += `   📅 Created: ${daysAgo} days ago\n`;
           }
-          if (case_.Priority) {
-            responseText += `   🔥 Priority: ${case_.Priority}\n`;
+          
+          // Show account value instead of priority
+          if (case_.Account && case_.Account.AnnualRevenue) {
+            const revenue = Number(case_.Account.AnnualRevenue).toLocaleString();
+            responseText += `   💰 Account Value: $${revenue}\n`;
+          }
+          
+          // Show account name
+          if (case_.Account && case_.Account.Name) {
+            responseText += `   🏢 Account: ${case_.Account.Name}\n`;
           }
         });
         responseText += '\n';
@@ -437,7 +448,7 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
 
   // Execute the approved plan
   await respond({
-    text: "✅ **Plan approved!** Executing tools...",
+    text: `✅ **Plan approved!** Executing tools...\n\n🔍 **Original Request:** "${pendingPlan.userPrompt}"`,
     response_type: "ephemeral"
   });
 
@@ -457,21 +468,65 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
     for (let i = 0; i < pendingPlan.toolPlan.selectedTools.length; i++) {
       const toolCall = pendingPlan.toolPlan.selectedTools[i];
       
-      // Show current tool execution in thread
+      // Show current tool execution in thread with query details
+      let progressMessage = `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`;
+      
+      // Add query details if it's search_salesforce
+      if (toolCall.toolName === 'search_salesforce') {
+        const query = toolCall.parameters.query || 'No query specified';
+        progressMessage += `\n\n🔍 **Query:** ${query}`;
+        
+        // Add parsed parameters if available
+        if (toolCall.parameters.objectTypes) {
+          progressMessage += `\n📊 **Objects:** ${toolCall.parameters.objectTypes.join(', ')}`;
+        }
+        if (toolCall.parameters.timeRange) {
+          progressMessage += `\n⏰ **Time Range:** ${toolCall.parameters.timeRange}`;
+        }
+        if (toolCall.parameters.keywords && toolCall.parameters.keywords.length > 0) {
+          progressMessage += `\n🔑 **Keywords:** ${toolCall.parameters.keywords.join(', ')}`;
+        }
+        
+        // Add actual query details
+        if (toolCall.parameters.objectTypes && toolCall.parameters.objectTypes.includes('Case')) {
+          progressMessage += `\n\n📝 **SOQL Query:** \`SELECT Id, CaseNumber, Subject, Status, CreatedDate, Account.Name, Account.AnnualRevenue FROM Case WHERE Status = 'Closed' AND CreatedDate = LAST_N_DAYS:30 ORDER BY CreatedDate DESC\``;
+        }
+      }
+      
       await client.chat.postMessage({
         channel: pendingPlan.channelId,
-        text: `⏳ **Step ${i + 1}:** Running ${toolCall.toolName}...`,
+        text: progressMessage,
         thread_ts: body.message.ts
       });
       
       const result = await toolService.executeTool(toolCall.toolName, toolCall.parameters);
       toolResults.push(result);
       
-      // Show completion in thread
+      // Show completion in thread with result summary
       const status = result.success ? "✅" : "❌";
+      let completionMessage = `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`;
+      
+      // Add result summary for search_salesforce
+      if (toolCall.toolName === 'search_salesforce' && result.success && result.data) {
+        let totalResults = 0;
+        Object.values(result.data).forEach(arr => {
+          if (Array.isArray(arr)) {
+            totalResults += arr.length;
+          }
+        });
+        completionMessage += `\n📊 **Found:** ${totalResults} total records`;
+        
+        // Show breakdown by object type
+        Object.entries(result.data).forEach(([type, records]) => {
+          if (Array.isArray(records) && records.length > 0) {
+            completionMessage += `\n  • ${type}: ${records.length} records`;
+          }
+        });
+      }
+      
       await client.chat.postMessage({
         channel: pendingPlan.channelId,
-        text: `${status} **Step ${i + 1}:** ${toolCall.toolName} complete`,
+        text: completionMessage,
         thread_ts: body.message.ts
       });
     }
@@ -487,6 +542,15 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
       thread_ts: body.message.ts
     });
     
+    // Send AI analysis placeholder
+    setTimeout(async () => {
+      await client.chat.postMessage({
+        channel: pendingPlan.channelId,
+        text: "🧠 **AI Analysis Available:** Reply to this thread with questions like:\n• 'What patterns do you see in these cases?'\n• 'Which accounts have the most issues?'\n• 'What are the main problem categories?'\n• 'Analyze the trends in these results'",
+        thread_ts: body.message.ts
+      });
+    }, 1000);
+    
     // Send follow-up guidance in thread
     setTimeout(async () => {
       await client.chat.postMessage({
@@ -494,7 +558,7 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
         text: "💬 **Ask me anything about these results!** I'll remember the context for follow-up questions.",
         thread_ts: body.message.ts
       });
-    }, 1000);
+    }, 2000);
     
     setTimeout(async () => {
       await client.chat.postMessage({
@@ -502,7 +566,7 @@ slackApp.action('approve_plan', async ({ body, ack, respond, context, client }) 
         text: "🔍 **Ready for a new search?** Use `/station [your request]` to start fresh!",
         thread_ts: body.message.ts
       });
-    }, 2000);
+    }, 3000);
     
     // Clear the pending plan
     delete global.pendingPlans[planKey];
